@@ -1,10 +1,10 @@
-/* ── State ───────────────────────────────────────────────────── */
+/*  State  */
 let selectedFiles = [];
 let currentDashboardId = null;
-const chartInstances = [];      // {instance, originalConfig, canvasId, cardId}
+const chartInstances = [];      // {instance, originalConfig, canvasId, cardId, chartId, csvFileId}
 let dashboardData = null;       // full dashboard data for custom chart building
 
-/* ── DOM refs ────────────────────────────────────────────────── */
+/*  DOM refs  */
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
@@ -12,7 +12,7 @@ const $$ = (sel) => document.querySelectorAll(sel);
 const SWITCHABLE_TYPES = ["bar", "line", "pie", "doughnut", "polarArea", "radar"];
 const POINT_CHART_TYPES = ["scatter", "bubble"];
 
-/* ── Init (runs on index.html only) ──────────────────────────── */
+/*  Init (runs on index.html only)  */
 document.addEventListener("DOMContentLoaded", () => {
     const dropZone = $("#drop-zone");
     const fileInput = $("#file-input");
@@ -40,7 +40,7 @@ document.addEventListener("DOMContentLoaded", () => {
     loadDashboards();
 });
 
-/* ── File management ─────────────────────────────────────────── */
+/*  File management  */
 function addFiles(files) {
     files.forEach((f) => {
         if (!selectedFiles.find((sf) => sf.name === f.name && sf.size === f.size)) {
@@ -71,9 +71,20 @@ function renderFileList() {
         `;
         container.appendChild(tag);
     });
+
+    // Show/hide role assignment when multiple files
+    const roleDiv = $("#role-assignment");
+    if (roleDiv) {
+        if (selectedFiles.length > 1) {
+            roleDiv.classList.remove("hidden");
+            renderRoleAssignment();
+        } else {
+            roleDiv.classList.add("hidden");
+        }
+    }
 }
 
-/* ── Upload handler ──────────────────────────────────────────── */
+/*  Upload handler  */
 async function handleUpload() {
     if (selectedFiles.length === 0) return;
 
@@ -82,6 +93,13 @@ async function handleUpload() {
 
     const name = $("#dashboard-name").value.trim();
     if (name) formData.append("dashboard_name", name);
+
+    // Collect roles
+    const roles = selectedFiles.map((f, i) => {
+        const roleSelect = $(`#file-role-${i}`);
+        return { role: roleSelect ? roleSelect.value : (i === 0 ? "primary" : "secondary") };
+    });
+    formData.append("roles", JSON.stringify(roles));
 
     $("#upload-section").classList.add("hidden");
     $("#loading").classList.remove("hidden");
@@ -111,35 +129,36 @@ async function handleUpload() {
     }
 }
 
-/* ── Show dashboard preview (index.html) ─────────────────────── */
+/*  Show dashboard preview (index.html)  */
 function showPreview(data) {
     $("#upload-section").classList.remove("hidden");
     $("#preview-section").classList.remove("hidden");
     $("#preview-title").textContent = data.name;
 
-    // Data preview table
+    // Data preview tables � ALL CSVs
     const previewDiv = $("#data-preview");
-    if (data.csv_files && data.csv_files.length > 0 && data.csv_files[0].preview) {
-        const rows = data.csv_files[0].preview;
+    previewDiv.innerHTML = "";
+
+    (data.csv_files || []).forEach((cf) => {
+        if (!cf.preview || cf.preview.length === 0) return;
+        const rows = cf.preview;
         const cols = Object.keys(rows[0] || {});
-        previewDiv.innerHTML = `
-            <div class="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden mb-2">
+        previewDiv.innerHTML += `
+            <div class="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden mb-4">
                 <div class="px-4 py-2 border-b border-slate-800 flex items-center gap-2">
                     <span class="text-sm font-medium text-slate-300">Data Preview</span>
-                    <span class="text-xs text-slate-600">${data.csv_files[0].filename} · ${data.csv_files[0].rows.toLocaleString()} rows × ${data.csv_files[0].cols} columns</span>
+                    <span class="text-xs text-slate-600">${esc(cf.filename)}  ${cf.rows.toLocaleString()} rows  ${cf.cols} columns</span>
                 </div>
                 <div class="overflow-x-auto max-h-48">
                     <table class="preview-table">
-                        <thead><tr>${cols.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead>
-                        <tbody>${rows.map((r) => `<tr>${cols.map((c) => `<td>${esc(String(r[c] ?? ""))}</td>`).join("")}</tr>`).join("")}</tbody>
+                        <thead><tr>${cols.map((c) => "<th>" + esc(c) + "</th>").join("")}</tr></thead>
+                        <tbody>${rows.map((r) => "<tr>" + cols.map((c) => "<td>" + esc(String(r[c] ?? "")) + "</td>").join("") + "</tr>").join("")}</tbody>
                     </table>
                 </div>
             </div>`;
-    } else {
-        previewDiv.innerHTML = "";
-    }
+    });
 
-    // Summary stats
+    // Summary stats � ALL CSVs
     const summaryDiv = $("#summary-section");
     if (summaryDiv && data.csv_files) {
         renderSummaryStats(data.csv_files, summaryDiv);
@@ -148,19 +167,19 @@ function showPreview(data) {
     renderCharts(data.charts, "#charts-grid");
 }
 
-/* ── Load single dashboard (dashboard.html) ──────────────────── */
+/*  Load single dashboard (dashboard.html)  */
 async function loadSingleDashboard(dashId) {
     currentDashboardId = dashId;
     try {
-        const res = await fetch(`/api/dashboards/${dashId}`);
+        const res = await fetch("/api/dashboards/" + dashId);
         if (!res.ok) throw new Error("Dashboard not found");
         const data = await res.json();
         dashboardData = data;
 
         $("#dash-title").textContent = data.name;
-        $("#dash-meta").textContent = `Created ${formatDate(data.created_at)} · ${data.charts.length} charts`;
+        $("#dash-meta").textContent = "Created " + formatDate(data.created_at) + "  " + data.charts.length + " charts  " + (data.csv_files || []).length + " files";
 
-        // CSV info cards
+        // CSV info cards with download buttons
         const infoDiv = $("#csv-info");
         infoDiv.innerHTML = "";
         (data.csv_files || []).forEach((cf) => {
@@ -172,19 +191,23 @@ async function loadSingleDashboard(dashId) {
 
             infoDiv.innerHTML += `
                 <div class="stat-badge">
-                    <div class="text-sm text-indigo-400 font-medium mb-2">${esc(cf.original_filename)}</div>
+                    <div class="text-sm text-indigo-400 font-medium mb-2 truncate">${esc(cf.original_filename)}</div>
                     <div class="flex justify-around">
                         <div><div class="value">${cf.row_count?.toLocaleString() || "?"}</div><div class="label">Rows</div></div>
                         <div><div class="value">${cf.col_count || "?"}</div><div class="label">Columns</div></div>
                     </div>
                     <div class="text-xs text-slate-500 mt-2">
-                        ${numericCount} numeric · ${catCount} categorical · ${dateCount} datetime
+                        ${numericCount} numeric  ${catCount} categorical  ${dateCount} datetime
                     </div>
+                    <button onclick="downloadCSV('${esc(cf.id)}')" class="mt-2 text-xs text-emerald-400 hover:text-emerald-300 transition flex items-center gap-1 mx-auto">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                        Download CSV
+                    </button>
                 </div>`;
         });
         infoDiv.classList.remove("hidden");
 
-        // Summary stats
+        // Summary stats � ALL CSVs
         const summaryDiv = $("#summary-section");
         if (summaryDiv) {
             loadAndRenderSummary(dashId, summaryDiv);
@@ -195,7 +218,7 @@ async function loadSingleDashboard(dashId) {
         chartsGrid.classList.remove("hidden");
         renderCharts(data.charts, "#charts-grid");
 
-        // Populate "Add Chart" column selectors
+        // Populate "Add Chart" column selectors � ALL CSVs
         populateAddChartModal(data);
 
     } catch (err) {
@@ -205,10 +228,22 @@ async function loadSingleDashboard(dashId) {
     }
 }
 
-/* ── Summary Stats ───────────────────────────────────────────── */
+/*  Download individual CSV  */
+function downloadCSV(csvFileId) {
+    const dashId = currentDashboardId || window.location.pathname.split("/").pop();
+    const a = document.createElement("a");
+    a.href = "/api/dashboards/" + dashId + "/csv/" + csvFileId + "/download";
+    a.download = "";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    toast("Downloading CSV", "success");
+}
+
+/*  Summary Stats  */
 async function loadAndRenderSummary(dashId, container) {
     try {
-        const res = await fetch(`/api/dashboards/${dashId}/summary`);
+        const res = await fetch("/api/dashboards/" + dashId + "/summary");
         if (!res.ok) return;
         const summaryData = await res.json();
         renderSummaryFromAPI(summaryData, container);
@@ -262,35 +297,27 @@ function buildSummaryTable(filename, stats) {
         { key: "missing", label: "Missing" },
     ];
 
-    return `
-        <div class="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
-            <div class="px-4 py-3 border-b border-slate-800 flex items-center gap-2">
-                <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
-                <span class="text-sm font-medium text-slate-300">Summary Statistics</span>
-                <span class="text-xs text-slate-600">${esc(filename)}</span>
-            </div>
-            <div class="overflow-x-auto">
-                <table class="preview-table">
-                    <thead>
-                        <tr>
-                            <th>Column</th>
-                            ${fields.map((f) => `<th>${f.label}</th>`).join("")}
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${stats.map((s) => `
-                            <tr>
-                                <td class="font-medium text-indigo-300">${esc(s.column)}</td>
-                                ${fields.map((f) => `<td>${formatNum(s[f.key])}</td>`).join("")}
-                            </tr>
-                        `).join("")}
-                    </tbody>
-                </table>
-            </div>
-        </div>`;
+    return '<div class="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden mb-4">'
+        + '<div class="px-4 py-3 border-b border-slate-800 flex items-center gap-2">'
+        + '<svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>'
+        + '<span class="text-sm font-medium text-slate-300">Summary Statistics</span>'
+        + '<span class="text-xs text-slate-600">' + esc(filename) + '</span>'
+        + '</div>'
+        + '<div class="overflow-x-auto">'
+        + '<table class="preview-table">'
+        + '<thead><tr><th>Column</th>'
+        + fields.map((f) => "<th>" + f.label + "</th>").join("")
+        + '</tr></thead>'
+        + '<tbody>'
+        + stats.map((s) =>
+            '<tr><td class="font-medium text-indigo-300">' + esc(s.column) + '</td>'
+            + fields.map((f) => "<td>" + formatNum(s[f.key]) + "</td>").join("")
+            + '</tr>'
+        ).join("")
+        + '</tbody></table></div></div>';
 }
 
-/* ── Render charts with type switcher ────────────────────────── */
+/*  Render charts with type switcher, delete, rename  */
 function renderCharts(charts, gridSelector) {
     const grid = $(gridSelector);
     grid.innerHTML = "";
@@ -298,30 +325,58 @@ function renderCharts(charts, gridSelector) {
     chartInstances.forEach((ci) => ci.instance.destroy());
     chartInstances.length = 0;
 
+    // Map csv_file_id to filename for grouping headers
+    const csvFileMap = {};
+    if (dashboardData && dashboardData.csv_files) {
+        dashboardData.csv_files.forEach((cf) => {
+            csvFileMap[cf.id || cf.csv_file_id] = cf.original_filename || cf.filename;
+        });
+    }
+
+    let lastCsvFileId = null;
+
     charts.forEach((chart, i) => {
         const cfg = chart.config || chart;
+        const chartId = chart.id || null;
+        const csvFileId = chart.csv_file_id || null;
+
+        // Insert a file separator when CSV source changes
+        if (csvFileId && csvFileId !== lastCsvFileId && csvFileMap[csvFileId]) {
+            const separator = document.createElement("div");
+            separator.className = "col-span-1 lg:col-span-2 mt-4 mb-1";
+            separator.innerHTML =
+                '<div class="flex items-center gap-2">'
+                + '<svg class="w-4 h-4 text-indigo-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>'
+                + '<span class="text-sm font-semibold text-indigo-400">' + esc(csvFileMap[csvFileId]) + '</span>'
+                + '<div class="flex-1 border-t border-slate-800"></div>'
+                + '</div>';
+            grid.appendChild(separator);
+            lastCsvFileId = csvFileId;
+        }
+
         const card = document.createElement("div");
         card.className = "chart-card";
-        card.id = `chart-card-${i}`;
+        card.id = "chart-card-" + i;
 
-        // Chart type switcher dropdown
         const isPointChart = POINT_CHART_TYPES.includes(cfg.type);
         const availableTypes = isPointChart ? ["scatter"] : SWITCHABLE_TYPES;
 
         const header = document.createElement("div");
         header.className = "chart-header";
-        header.innerHTML = `
-            <span class="chart-title-text">${esc(chart.title || cfg.plugins?.title?.text || "Chart")}</span>
-            <select class="chart-type-select" data-chart-index="${i}" onchange="switchChartType(${i}, this.value)">
-                ${availableTypes.map((t) => `<option value="${t}" ${t === cfg.type ? "selected" : ""}>${capitalise(t)}</option>`).join("")}
-            </select>
-        `;
+        header.innerHTML =
+            '<span class="chart-title-text" id="chart-title-' + i + '" ondblclick="startRenameChart(' + i + ')" title="Double-click to rename">' + esc(chart.title || (cfg.options && cfg.options.plugins && cfg.options.plugins.title && cfg.options.plugins.title.text) || "Chart") + '</span>'
+            + '<div class="chart-actions">'
+            + '<button class="chart-action-btn" onclick="startRenameChart(' + i + ')" title="Rename"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg></button>'
+            + '<button class="chart-action-btn chart-action-delete" onclick="deleteChart(' + i + ')" title="Delete"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button>'
+            + '<select class="chart-type-select" data-chart-index="' + i + '" onchange="switchChartType(' + i + ', this.value)">'
+            + availableTypes.map((t) => '<option value="' + t + '"' + (t === cfg.type ? ' selected' : '') + '>' + capitalise(t) + '</option>').join("")
+            + '</select></div>';
         card.appendChild(header);
 
         const canvasWrap = document.createElement("div");
         canvasWrap.className = "chart-canvas-wrap";
         const canvas = document.createElement("canvas");
-        canvas.id = `chart-${i}`;
+        canvas.id = "chart-" + i;
         canvasWrap.appendChild(canvas);
         card.appendChild(canvasWrap);
         grid.appendChild(card);
@@ -329,36 +384,132 @@ function renderCharts(charts, gridSelector) {
         const cfgCopy = JSON.parse(JSON.stringify(cfg));
         const instance = new Chart(canvas.getContext("2d"), cfgCopy);
         chartInstances.push({
-            instance,
+            instance: instance,
             originalConfig: JSON.parse(JSON.stringify(cfg)),
-            canvasId: `chart-${i}`,
-            cardId: `chart-card-${i}`,
+            canvasId: "chart-" + i,
+            cardId: "chart-card-" + i,
+            chartId: chartId,
+            csvFileId: csvFileId,
         });
     });
 }
 
-/* ── Switch chart type ───────────────────────────────────────── */
+/*  Delete chart  */
+async function deleteChart(index) {
+    const ci = chartInstances[index];
+    if (!ci) return;
+
+    if (!confirm("Delete this chart?")) return;
+
+    const dashId = currentDashboardId || window.location.pathname.split("/").pop();
+
+    if (ci.chartId) {
+        try {
+            const res = await fetch("/api/dashboards/" + dashId + "/charts/" + ci.chartId, { method: "DELETE" });
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.detail || "Delete failed");
+            }
+        } catch (err) {
+            toast(err.message, "error");
+            return;
+        }
+    }
+
+    ci.instance.destroy();
+    const card = $("#" + ci.cardId);
+    if (card) {
+        card.style.transition = "all 0.3s ease";
+        card.style.opacity = "0";
+        card.style.transform = "scale(0.9)";
+        setTimeout(function() { card.remove(); }, 300);
+    }
+
+    chartInstances[index] = null;
+    toast("Chart deleted", "success");
+}
+
+/*  Rename chart  */
+function startRenameChart(index) {
+    const ci = chartInstances[index];
+    if (!ci) return;
+
+    const titleSpan = $("#chart-title-" + index);
+    if (!titleSpan) return;
+
+    const currentTitle = titleSpan.textContent;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = currentTitle;
+    input.className = "chart-rename-input";
+    input.style.cssText = "background:#0f172a;border:1px solid #6366f1;border-radius:4px;color:#e2e8f0;font-size:0.8rem;font-weight:600;padding:2px 6px;width:100%;outline:none;";
+
+    titleSpan.replaceWith(input);
+    input.focus();
+    input.select();
+
+    var finished = false;
+    var finishRename = async function() {
+        if (finished) return;
+        finished = true;
+        var newTitle = input.value.trim() || currentTitle;
+        var newSpan = document.createElement("span");
+        newSpan.className = "chart-title-text";
+        newSpan.id = "chart-title-" + index;
+        newSpan.setAttribute("ondblclick", "startRenameChart(" + index + ")");
+        newSpan.setAttribute("title", "Double-click to rename");
+        newSpan.textContent = newTitle;
+        input.replaceWith(newSpan);
+
+        if (newTitle !== currentTitle) {
+            var dashId = currentDashboardId || window.location.pathname.split("/").pop();
+            if (ci.chartId) {
+                try {
+                    var res = await fetch("/api/dashboards/" + dashId + "/charts/" + ci.chartId, {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ title: newTitle }),
+                    });
+                    if (res.ok) {
+                        if (ci.instance.options && ci.instance.options.plugins && ci.instance.options.plugins.title) {
+                            ci.instance.options.plugins.title.text = newTitle;
+                            ci.instance.update();
+                        }
+                        toast("Chart renamed", "success");
+                    }
+                } catch (err) {
+                    toast("Rename failed", "error");
+                }
+            }
+        }
+    };
+
+    input.addEventListener("blur", finishRename);
+    input.addEventListener("keydown", function(e) {
+        if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+        if (e.key === "Escape") { input.value = currentTitle; input.blur(); }
+    });
+}
+
+/*  Switch chart type  */
 function switchChartType(index, newType) {
     const ci = chartInstances[index];
     if (!ci) return;
 
     const origCfg = JSON.parse(JSON.stringify(ci.originalConfig));
 
-    // Don't switch scatter ↔ label-based charts (incompatible data shapes)
     if (POINT_CHART_TYPES.includes(origCfg.type) && !POINT_CHART_TYPES.includes(newType)) return;
 
     origCfg.type = newType;
 
-    // Adjust options for pie/doughnut/polarArea (no x/y scales)
     const noScaleTypes = ["pie", "doughnut", "polarArea"];
     if (noScaleTypes.includes(newType)) {
-        delete origCfg.options?.scales;
-        if (origCfg.options?.indexAxis) delete origCfg.options.indexAxis;
-        if (origCfg.options?.plugins?.legend) {
+        if (origCfg.options && origCfg.options.scales) delete origCfg.options.scales;
+        if (origCfg.options && origCfg.options.indexAxis) delete origCfg.options.indexAxis;
+        if (origCfg.options && origCfg.options.plugins && origCfg.options.plugins.legend) {
             origCfg.options.plugins.legend.position = "right";
         }
     } else if (newType === "radar") {
-        // Radar uses radial scales
         if (origCfg.options) {
             delete origCfg.options.scales;
             origCfg.options.scales = {
@@ -366,7 +517,6 @@ function switchChartType(index, newType) {
             };
         }
     } else {
-        // Restore x/y scales if missing
         if (!origCfg.options) origCfg.options = {};
         if (!origCfg.options.scales) {
             origCfg.options.scales = {
@@ -376,61 +526,87 @@ function switchChartType(index, newType) {
         }
     }
 
-    // For line charts, add tension
     if (newType === "line") {
-        origCfg.data.datasets.forEach((ds) => {
+        origCfg.data.datasets.forEach(function(ds) {
             ds.tension = ds.tension || 0.35;
             ds.fill = ds.fill !== undefined ? ds.fill : false;
             ds.pointRadius = ds.pointRadius || 3;
         });
     }
 
-    // Destroy old & create new
     ci.instance.destroy();
-    const canvas = $(`#${ci.canvasId}`);
-    const newInstance = new Chart(canvas.getContext("2d"), origCfg);
+    var canvas = $("#" + ci.canvasId);
+    var newInstance = new Chart(canvas.getContext("2d"), origCfg);
     ci.instance = newInstance;
 }
 
-/* ── Add Custom Chart Modal ──────────────────────────────────── */
+/*  Add Custom Chart Modal � ALL CSVs  */
 function populateAddChartModal(data) {
-    const colXSelect = $("#custom-col-x");
-    const colYSelect = $("#custom-col-y");
+    var csvSelect = $("#custom-csv-select");
+    var colXSelect = $("#custom-col-x");
+    var colYSelect = $("#custom-col-y");
+    if (!colXSelect || !colYSelect) return;
+
+    if (csvSelect) {
+        csvSelect.innerHTML = "";
+        (data.csv_files || []).forEach(function(cf, i) {
+            var fname = cf.original_filename || cf.filename;
+            var id = cf.id || cf.csv_file_id || "";
+            csvSelect.innerHTML += '<option value="' + esc(id) + '"' + (i === 0 ? ' selected' : '') + '>' + esc(fname) + '</option>';
+        });
+
+        csvSelect.onchange = function() { populateColumnsForCSV(data, csvSelect.value); };
+    }
+
+    var firstCsvId = data.csv_files && data.csv_files[0] ? (data.csv_files[0].id || data.csv_files[0].csv_file_id || "") : "";
+    populateColumnsForCSV(data, firstCsvId);
+}
+
+function populateColumnsForCSV(data, csvFileId) {
+    var colXSelect = $("#custom-col-x");
+    var colYSelect = $("#custom-col-y");
     if (!colXSelect || !colYSelect) return;
 
     colXSelect.innerHTML = '<option value="">Select column...</option>';
     colYSelect.innerHTML = '<option value="">None (single column)</option>';
 
-    const csvFile = data.csv_files?.[0];
+    var csvFile = null;
+    (data.csv_files || []).forEach(function(cf) {
+        if ((cf.id || cf.csv_file_id) === csvFileId) csvFile = cf;
+    });
+    if (!csvFile && data.csv_files && data.csv_files[0]) csvFile = data.csv_files[0];
     if (!csvFile) return;
 
-    const meta = typeof csvFile.columns_meta === "string" ? JSON.parse(csvFile.columns_meta) : csvFile.columns_meta;
+    var meta = typeof csvFile.columns_meta === "string" ? JSON.parse(csvFile.columns_meta) : csvFile.columns_meta;
     if (!meta) return;
 
-    Object.entries(meta).forEach(([col, info]) => {
-        const typeLabel = info.dtype || "unknown";
-        const opt = `<option value="${esc(col)}">${esc(col)} (${typeLabel})</option>`;
+    Object.entries(meta).forEach(function(entry) {
+        var col = entry[0];
+        var info = entry[1];
+        var typeLabel = info.dtype || "unknown";
+        var opt = '<option value="' + esc(col) + '">' + esc(col) + ' (' + typeLabel + ')</option>';
         colXSelect.innerHTML += opt;
         colYSelect.innerHTML += opt;
     });
 }
 
 function openAddChartModal() {
-    const modal = $("#add-chart-modal");
+    var modal = $("#add-chart-modal");
     if (modal) modal.classList.remove("hidden");
     if (dashboardData) populateAddChartModal(dashboardData);
 }
 
 function closeAddChartModal() {
-    const modal = $("#add-chart-modal");
+    var modal = $("#add-chart-modal");
     if (modal) modal.classList.add("hidden");
 }
 
 async function submitCustomChart() {
-    const chartType = $("#custom-chart-type")?.value;
-    const colX = $("#custom-col-x")?.value;
-    const colY = $("#custom-col-y")?.value;
-    const dashId = currentDashboardId || window.location.pathname.split("/").pop();
+    var chartType = $("#custom-chart-type") ? $("#custom-chart-type").value : "";
+    var colX = $("#custom-col-x") ? $("#custom-col-x").value : "";
+    var colY = $("#custom-col-y") ? $("#custom-col-y").value : "";
+    var csvSelect = $("#custom-csv-select");
+    var dashId = currentDashboardId || window.location.pathname.split("/").pop();
 
     if (!colX) {
         toast("Please select at least one column", "error");
@@ -442,70 +618,72 @@ async function submitCustomChart() {
         return;
     }
 
-    const csvFileId = dashboardData?.csv_files?.[0]?.id;
+    var csvFileId = csvSelect ? csvSelect.value : (dashboardData && dashboardData.csv_files && dashboardData.csv_files[0] ? dashboardData.csv_files[0].id : "");
 
-    const body = { chart_type: chartType, col_x: colX, csv_file_id: csvFileId };
+    var body = { chart_type: chartType, col_x: colX, csv_file_id: csvFileId };
     if (colY) body.col_y = colY;
 
     try {
-        const res = await fetch(`/api/dashboards/${dashId}/charts`, {
+        var res = await fetch("/api/dashboards/" + dashId + "/charts", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body),
         });
         if (!res.ok) {
-            const err = await res.json();
-            throw new Error(err.detail || "Failed to create chart");
+            var errBody = await res.json();
+            throw new Error(errBody.detail || "Failed to create chart");
         }
-        const chart = await res.json();
+        var chart = await res.json();
 
-        // Add chart to the grid dynamically
-        const grid = $("#charts-grid");
-        const idx = chartInstances.length;
-        const cfg = chart.config || chart;
+        var grid = $("#charts-grid");
+        var idx = chartInstances.length;
+        var cfg = chart.config || chart;
 
-        const card = document.createElement("div");
+        var card = document.createElement("div");
         card.className = "chart-card";
-        card.id = `chart-card-${idx}`;
+        card.id = "chart-card-" + idx;
 
-        const isPointChart = POINT_CHART_TYPES.includes(cfg.type);
-        const availableTypes = isPointChart ? ["scatter"] : SWITCHABLE_TYPES;
+        var isPointChart = POINT_CHART_TYPES.includes(cfg.type);
+        var availableTypes = isPointChart ? ["scatter"] : SWITCHABLE_TYPES;
 
-        const header = document.createElement("div");
+        var header = document.createElement("div");
         header.className = "chart-header";
-        header.innerHTML = `
-            <span class="chart-title-text">${esc(chart.title || "Custom Chart")}</span>
-            <select class="chart-type-select" data-chart-index="${idx}" onchange="switchChartType(${idx}, this.value)">
-                ${availableTypes.map((t) => `<option value="${t}" ${t === cfg.type ? "selected" : ""}>${capitalise(t)}</option>`).join("")}
-            </select>
-        `;
+        header.innerHTML =
+            '<span class="chart-title-text" id="chart-title-' + idx + '" ondblclick="startRenameChart(' + idx + ')" title="Double-click to rename">' + esc(chart.title || "Custom Chart") + '</span>'
+            + '<div class="chart-actions">'
+            + '<button class="chart-action-btn" onclick="startRenameChart(' + idx + ')" title="Rename"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg></button>'
+            + '<button class="chart-action-btn chart-action-delete" onclick="deleteChart(' + idx + ')" title="Delete"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button>'
+            + '<select class="chart-type-select" data-chart-index="' + idx + '" onchange="switchChartType(' + idx + ', this.value)">'
+            + availableTypes.map(function(t) { return '<option value="' + t + '"' + (t === cfg.type ? ' selected' : '') + '>' + capitalise(t) + '</option>'; }).join("")
+            + '</select></div>';
         card.appendChild(header);
 
-        const canvasWrap = document.createElement("div");
+        var canvasWrap = document.createElement("div");
         canvasWrap.className = "chart-canvas-wrap";
-        const canvas = document.createElement("canvas");
-        canvas.id = `chart-${idx}`;
+        var canvas = document.createElement("canvas");
+        canvas.id = "chart-" + idx;
         canvasWrap.appendChild(canvas);
         card.appendChild(canvasWrap);
 
         grid.appendChild(card);
 
-        // Animate in
         card.style.opacity = "0";
         card.style.transform = "translateY(20px)";
-        requestAnimationFrame(() => {
+        requestAnimationFrame(function() {
             card.style.transition = "all 0.3s ease";
             card.style.opacity = "1";
             card.style.transform = "translateY(0)";
         });
 
-        const cfgCopy = JSON.parse(JSON.stringify(cfg));
-        const instance = new Chart(canvas.getContext("2d"), cfgCopy);
+        var cfgCopy = JSON.parse(JSON.stringify(cfg));
+        var instance = new Chart(canvas.getContext("2d"), cfgCopy);
         chartInstances.push({
-            instance,
+            instance: instance,
             originalConfig: JSON.parse(JSON.stringify(cfg)),
-            canvasId: `chart-${idx}`,
-            cardId: `chart-card-${idx}`,
+            canvasId: "chart-" + idx,
+            cardId: "chart-card-" + idx,
+            chartId: chart.id || null,
+            csvFileId: csvFileId,
         });
 
         closeAddChartModal();
@@ -516,102 +694,99 @@ async function submitCustomChart() {
     }
 }
 
-/* ── Load dashboards list ────────────────────────────────────── */
+/*  Load dashboards list  */
 async function loadDashboards() {
-    const listDiv = $("#dashboards-list");
-    const emptyMsg = $("#no-dashboards");
+    var listDiv = $("#dashboards-list");
+    var emptyMsg = $("#no-dashboards");
     if (!listDiv) return;
 
     try {
-        const res = await fetch("/api/dashboards");
-        const dashboards = await res.json();
+        var res = await fetch("/api/dashboards");
+        var dashboards = await res.json();
 
         if (dashboards.length === 0) {
             listDiv.innerHTML = "";
-            emptyMsg?.classList.remove("hidden");
+            if (emptyMsg) emptyMsg.classList.remove("hidden");
             return;
         }
 
-        emptyMsg?.classList.add("hidden");
+        if (emptyMsg) emptyMsg.classList.add("hidden");
         listDiv.innerHTML = dashboards
-            .map(
-                (d) => `
-            <div class="dash-card" onclick="window.location='/dashboard/${d.id}'">
-                <div class="flex items-start justify-between mb-3">
-                    <h3 class="font-semibold text-white text-sm truncate flex-1">${esc(d.name)}</h3>
-                    <span class="text-xs text-slate-600 ml-2 shrink-0">${formatDate(d.created_at)}</span>
-                </div>
-                <div class="flex items-center gap-3 text-xs text-slate-500">
-                    <span class="flex items-center gap-1">
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2z"/></svg>
-                        ${d.chart_count} charts
-                    </span>
-                    <span class="flex items-center gap-1">
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                        ${esc(d.csv_files || "—")}
-                    </span>
-                </div>
-            </div>`
-            )
+            .map(function(d) {
+                return '<div class="dash-card" onclick="window.location=\'/dashboard/' + d.id + '\'">'
+                    + '<div class="flex items-start justify-between mb-3">'
+                    + '<h3 class="font-semibold text-white text-sm truncate flex-1">' + esc(d.name) + '</h3>'
+                    + '<span class="text-xs text-slate-600 ml-2 shrink-0">' + formatDate(d.created_at) + '</span>'
+                    + '</div>'
+                    + '<div class="flex items-center gap-3 text-xs text-slate-500">'
+                    + '<span class="flex items-center gap-1">'
+                    + '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2z"/></svg>'
+                    + d.chart_count + ' charts</span>'
+                    + '<span class="flex items-center gap-1">'
+                    + '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>'
+                    + esc(d.csv_files || "�") + '</span>'
+                    + '</div></div>';
+            })
             .join("");
     } catch (err) {
         console.error("Failed to load dashboards:", err);
     }
 }
 
-/* ── Export ───────────────────────────────────────────────────── */
+/*  Export  */
 function exportDashboard(format) {
     if (!currentDashboardId) return;
     _doExport(currentDashboardId, format);
 }
 
 function exportCurrent(format) {
-    const dashId = window.location.pathname.split("/").pop();
+    var dashId = window.location.pathname.split("/").pop();
     _doExport(dashId, format);
 }
 
 function _doExport(dashId, format) {
     if (format === "pdf") {
-        toast("Preparing PDF — uses browser print", "success");
+        toast("Preparing PDF � uses browser print", "success");
         window.print();
         return;
     }
-    const url = `/api/dashboards/${dashId}/export/${format}`;
-    const a = document.createElement("a");
+    var url = "/api/dashboards/" + dashId + "/export/" + format;
+    var a = document.createElement("a");
     a.href = url;
     a.download = "";
     document.body.appendChild(a);
     a.click();
     a.remove();
-    toast(`Downloading ${format.toUpperCase()}...`, "success");
+    toast("Downloading " + format.toUpperCase() + "...", "success");
 }
 
-/* ── Delete dashboard ────────────────────────────────────────── */
+/*  Delete dashboard  */
 async function deleteCurrent() {
-    const dashId = window.location.pathname.split("/").pop();
+    var dashId = window.location.pathname.split("/").pop();
     if (!confirm("Delete this dashboard permanently?")) return;
 
     try {
-        const res = await fetch(`/api/dashboards/${dashId}`, { method: "DELETE" });
+        var res = await fetch("/api/dashboards/" + dashId, { method: "DELETE" });
         if (!res.ok) throw new Error("Delete failed");
         toast("Dashboard deleted", "success");
-        setTimeout(() => (window.location.href = "/"), 800);
+        setTimeout(function() { window.location.href = "/"; }, 800);
     } catch (err) {
         toast(err.message, "error");
     }
 }
 
-/* ── Utilities ───────────────────────────────────────────────── */
-function toast(msg, type = "success") {
-    const el = document.createElement("div");
-    el.className = `toast ${type}`;
+/*  Utilities  */
+function toast(msg, type) {
+    type = type || "success";
+    var el = document.createElement("div");
+    el.className = "toast " + type;
     el.textContent = msg;
     document.body.appendChild(el);
-    setTimeout(() => el.remove(), 3200);
+    setTimeout(function() { el.remove(); }, 3200);
 }
 
 function esc(str) {
-    const d = document.createElement("div");
+    var d = document.createElement("div");
     d.textContent = str;
     return d.innerHTML;
 }
@@ -624,16 +799,44 @@ function formatSize(bytes) {
 
 function formatDate(dateStr) {
     if (!dateStr) return "";
-    const d = new Date(dateStr);
+    var d = new Date(dateStr);
     return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
 function formatNum(val) {
-    if (val === undefined || val === null) return "—";
+    if (val === undefined || val === null) return "�";
     if (typeof val === "number") return val.toLocaleString(undefined, { maximumFractionDigits: 2 });
     return String(val);
 }
 
 function capitalise(str) {
     return str.charAt(0).toUpperCase() + str.slice(1);
+}
+
+/*  Role assignment for multi-CSV upload  */
+function renderRoleAssignment() {
+    var container = $("#role-list");
+    if (!container) return;
+    container.innerHTML = "";
+
+    selectedFiles.forEach(function(f, i) {
+        container.innerHTML +=
+            '<div class="flex items-center gap-3">'
+            + '<span class="text-sm text-slate-300 flex-1 truncate">' + esc(f.name) + '</span>'
+            + '<select id="file-role-' + i + '" class="modal-select" style="max-width:200px">'
+            + '<option value="primary"' + (i === 0 ? ' selected' : '') + '>Primary</option>'
+            + '<option value="secondary"' + (i > 0 ? ' selected' : '') + '>Secondary</option>'
+            + '<option value="sales_data">Sales Data</option>'
+            + '<option value="order_details">Order Details</option>'
+            + '<option value="customer_data">Customer Data</option>'
+            + '<option value="product_data">Product Data</option>'
+            + '<option value="other">Other</option>'
+            + '</select></div>';
+    });
+}
+
+/*  Navigate to merge page  */
+function goToMerge() {
+    var dashId = currentDashboardId || window.location.pathname.split("/").pop();
+    window.location.href = "/dashboard/" + dashId + "/merge";
 }

@@ -68,6 +68,36 @@
 .chart-type-select:hover { border-color: #6366f1; }
 .chart-type-select:focus { border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2); }
 
+/* Chart action buttons (rename, delete) */
+.chart-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-shrink: 0;
+}
+.chart-action-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: #64748b;
+    padding: 0.2rem;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.chart-action-btn:hover {
+    color: #94a3b8;
+    background: #0f172a;
+    border-color: #334155;
+}
+.chart-action-delete:hover {
+    color: #f87171;
+    background: rgba(239, 68, 68, 0.1);
+    border-color: rgba(239, 68, 68, 0.3);
+}
+
 .chart-canvas-wrap {
     flex: 1;
     min-height: 0;

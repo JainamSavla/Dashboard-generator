@@ -56,6 +56,30 @@ def init_db():
             FOREIGN KEY (dashboard_id) REFERENCES dashboards(id) ON DELETE CASCADE,
             FOREIGN KEY (csv_file_id) REFERENCES csv_files(id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS merge_sessions (
+            id TEXT PRIMARY KEY,
+            dashboard_id TEXT NOT NULL,
+            merge_keys TEXT NOT NULL,      -- JSON array of key column names
+            join_type TEXT NOT NULL DEFAULT 'inner',
+            column_mappings TEXT,           -- JSON: per-csv column mappings
+            cleaning_log TEXT,             -- JSON: cleaning actions
+            merge_log TEXT,                -- JSON: merge actions
+            merged_file_path TEXT,         -- path to saved merged CSV
+            row_count INTEGER,
+            col_count INTEGER,
+            columns_info TEXT,             -- JSON: column metadata of merged result
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (dashboard_id) REFERENCES dashboards(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS csv_roles (
+            id TEXT PRIMARY KEY,
+            csv_file_id TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'primary',
+            sort_order INTEGER DEFAULT 0,
+            FOREIGN KEY (csv_file_id) REFERENCES csv_files(id) ON DELETE CASCADE
+        );
     """)
     conn.commit()
     conn.close()
@@ -103,17 +127,28 @@ def save_csv_metadata(dashboard_id: str, original_filename: str, stored_filename
     return csv_id
 
 
-def save_charts(dashboard_id: str, csv_file_id: str, charts: list[dict]):
+def save_charts(dashboard_id: str, csv_file_id: str, charts: list[dict]) -> list[dict]:
+    """Save charts and return them with their assigned IDs."""
     conn = get_db()
+    saved = []
     for i, chart in enumerate(charts):
+        chart_id = str(uuid.uuid4())
         conn.execute(
             """INSERT INTO charts (id, dashboard_id, csv_file_id, chart_type, title, config, sort_order)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (str(uuid.uuid4()), dashboard_id, csv_file_id,
+            (chart_id, dashboard_id, csv_file_id,
              chart["chart_type"], chart["title"], json.dumps(chart["config"]), i),
         )
+        saved.append({
+            "id": chart_id,
+            "csv_file_id": csv_file_id,
+            "chart_type": chart["chart_type"],
+            "title": chart["title"],
+            "config": chart["config"],
+        })
     conn.commit()
     conn.close()
+    return saved
 
 
 def get_dashboards(session_id: str) -> list[dict]:
@@ -145,12 +180,16 @@ def get_dashboard(dashboard_id: str, session_id: str) -> dict | None:
         return None
 
     csv_files = conn.execute(
-        "SELECT * FROM csv_files WHERE dashboard_id = ? ORDER BY uploaded_at",
+        "SELECT * FROM csv_files WHERE dashboard_id = ? ORDER BY rowid",
         (dashboard_id,),
     ).fetchall()
 
+    # Order charts grouped by csv_file insertion order (rowid), then by sort_order
     charts = conn.execute(
-        "SELECT * FROM charts WHERE dashboard_id = ? ORDER BY sort_order",
+        """SELECT ch.* FROM charts ch
+           LEFT JOIN csv_files cf ON cf.id = ch.csv_file_id AND cf.dashboard_id = ch.dashboard_id
+           WHERE ch.dashboard_id = ?
+           ORDER BY cf.rowid, ch.sort_order""",
         (dashboard_id,),
     ).fetchall()
 
@@ -183,3 +222,124 @@ def rename_dashboard(dashboard_id: str, session_id: str, new_name: str) -> bool:
     updated = cursor.rowcount > 0
     conn.close()
     return updated
+
+
+def delete_chart(chart_id: str, dashboard_id: str) -> bool:
+    conn = get_db()
+    cursor = conn.execute(
+        "DELETE FROM charts WHERE id = ? AND dashboard_id = ?",
+        (chart_id, dashboard_id),
+    )
+    conn.commit()
+    deleted = cursor.rowcount > 0
+    conn.close()
+    return deleted
+
+
+def rename_chart(chart_id: str, dashboard_id: str, new_title: str) -> bool:
+    conn = get_db()
+    # Update both the title column and the title inside the config JSON
+    row = conn.execute("SELECT config FROM charts WHERE id = ? AND dashboard_id = ?",
+                        (chart_id, dashboard_id)).fetchone()
+    if not row:
+        conn.close()
+        return False
+    cfg = json.loads(row["config"])
+    if cfg.get("options", {}).get("plugins", {}).get("title"):
+        cfg["options"]["plugins"]["title"]["text"] = new_title
+    cursor = conn.execute(
+        "UPDATE charts SET title = ?, config = ? WHERE id = ? AND dashboard_id = ?",
+        (new_title, json.dumps(cfg), chart_id, dashboard_id),
+    )
+    conn.commit()
+    updated = cursor.rowcount > 0
+    conn.close()
+    return updated
+
+
+# ── CSV Roles ─────────────────────────────────────────────────────
+def save_csv_role(csv_file_id: str, role: str, sort_order: int = 0) -> str:
+    role_id = str(uuid.uuid4())
+    conn = get_db()
+    conn.execute(
+        "INSERT OR REPLACE INTO csv_roles (id, csv_file_id, role, sort_order) VALUES (?, ?, ?, ?)",
+        (role_id, csv_file_id, role, sort_order),
+    )
+    conn.commit()
+    conn.close()
+    return role_id
+
+
+def get_csv_roles(dashboard_id: str) -> list[dict]:
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT r.id, r.csv_file_id, r.role, r.sort_order, cf.original_filename
+           FROM csv_roles r
+           JOIN csv_files cf ON cf.id = r.csv_file_id
+           WHERE cf.dashboard_id = ?
+           ORDER BY r.sort_order""",
+        (dashboard_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# ── Merge Sessions ────────────────────────────────────────────────
+def save_merge_session(
+    dashboard_id: str,
+    merge_keys: list,
+    join_type: str,
+    column_mappings: dict | None,
+    cleaning_log: list,
+    merge_log: list,
+    merged_file_path: str,
+    row_count: int,
+    col_count: int,
+    columns_info: list,
+) -> str:
+    merge_id = str(uuid.uuid4())
+    conn = get_db()
+    conn.execute(
+        """INSERT INTO merge_sessions
+           (id, dashboard_id, merge_keys, join_type, column_mappings,
+            cleaning_log, merge_log, merged_file_path, row_count, col_count, columns_info)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (merge_id, dashboard_id,
+         json.dumps(merge_keys), join_type,
+         json.dumps(column_mappings) if column_mappings else None,
+         json.dumps(cleaning_log), json.dumps(merge_log),
+         merged_file_path, row_count, col_count, json.dumps(columns_info)),
+    )
+    conn.commit()
+    conn.close()
+    return merge_id
+
+
+def get_merge_sessions(dashboard_id: str) -> list[dict]:
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM merge_sessions WHERE dashboard_id = ? ORDER BY created_at DESC",
+        (dashboard_id,),
+    ).fetchall()
+    conn.close()
+    result = []
+    for r in rows:
+        d = dict(r)
+        for key in ("merge_keys", "column_mappings", "cleaning_log", "merge_log", "columns_info"):
+            if d.get(key) and isinstance(d[key], str):
+                d[key] = json.loads(d[key])
+        result.append(d)
+    return result
+
+
+def get_merge_session(merge_id: str) -> dict | None:
+    conn = get_db()
+    row = conn.execute("SELECT * FROM merge_sessions WHERE id = ?", (merge_id,)).fetchone()
+    conn.close()
+    if not row:
+        return None
+    d = dict(row)
+    for key in ("merge_keys", "column_mappings", "cleaning_log", "merge_log", "columns_info"):
+        if d.get(key) and isinstance(d[key], str):
+            d[key] = json.loads(d[key])
+    return d
