@@ -94,14 +94,6 @@
 
                 <div class="space-y-4">
                     <div>
-                        <label class="block text-sm font-medium text-slate-400 mb-1.5">CSV File</label>
-                        <select id="custom-csv-select" class="modal-select">
-                            <option value="">Loading files...</option>
-                        </select>
-                        <p class="text-xs text-slate-600 mt-1">Select which CSV file to create the chart from</p>
-                    </div>
-
-                    <div>
                         <label class="block text-sm font-medium text-slate-400 mb-1.5">Chart Type</label>
                         <select id="custom-chart-type" class="modal-select">
                             <option value="bar">Bar Chart</option>
@@ -113,19 +105,39 @@
                         </select>
                     </div>
 
-                    <div>
-                        <label class="block text-sm font-medium text-slate-400 mb-1.5">Primary Column (X-axis)</label>
-                        <select id="custom-col-x" class="modal-select">
-                            <option value="">Select column...</option>
-                        </select>
+                    <!-- X-axis: CSV + Column -->
+                    <div class="bg-slate-800/50 rounded-lg p-3 space-y-2">
+                        <label class="block text-xs font-semibold text-indigo-400 uppercase tracking-wide">X-axis</label>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-400 mb-1">CSV File</label>
+                            <select id="custom-csv-x" class="modal-select" onchange="populateColumnsForAxis('x')">
+                                <option value="">Loading files...</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-400 mb-1">Column</label>
+                            <select id="custom-col-x" class="modal-select">
+                                <option value="">Select column...</option>
+                            </select>
+                        </div>
                     </div>
 
-                    <div>
-                        <label class="block text-sm font-medium text-slate-400 mb-1.5">Secondary Column (Y-axis, optional)</label>
-                        <select id="custom-col-y" class="modal-select">
-                            <option value="">None (single column)</option>
-                        </select>
-                        <p class="text-xs text-slate-600 mt-1">Required for scatter plots and line charts with two variables</p>
+                    <!-- Y-axis: CSV + Column -->
+                    <div class="bg-slate-800/50 rounded-lg p-3 space-y-2">
+                        <label class="block text-xs font-semibold text-amber-400 uppercase tracking-wide">Y-axis (optional)</label>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-400 mb-1">CSV File</label>
+                            <select id="custom-csv-y" class="modal-select" onchange="populateColumnsForAxis('y')">
+                                <option value="">Same as X-axis</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-400 mb-1">Column</label>
+                            <select id="custom-col-y" class="modal-select">
+                                <option value="">None (single column)</option>
+                            </select>
+                        </div>
+                        <p class="text-xs text-slate-600">Pick a different CSV to chart columns across files — no merge needed!</p>
                     </div>
 
                     <div class="flex gap-3 pt-2">

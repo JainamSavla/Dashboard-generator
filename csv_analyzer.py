@@ -325,10 +325,14 @@ def build_custom_chart(file_path: str | Path, chart_type: str,
         raise ValueError(f"Unsupported chart type: {chart_type}")
 
 
-def analyze_csv(file_path: str | Path) -> dict:
+def analyze_csv(file_path: str | Path, max_rows: int = 500000) -> dict:
     """Main entry: read CSV, classify columns, generate chart configs."""
     df = pd.read_csv(file_path, low_memory=False)
     df.columns = df.columns.str.strip()
+    
+    # Check row count limit
+    if len(df) > max_rows:
+        raise ValueError(f"CSV has {len(df):,} rows, exceeding the maximum of {max_rows:,} rows. Please use a smaller file.")
 
     col_meta = classify_columns(df)
     numeric_cols = [c for c, m in col_meta.items() if m["dtype"] == "numeric"]
@@ -381,4 +385,123 @@ def analyze_csv(file_path: str | Path) -> dict:
         "charts": charts,
         "summary_stats": summary_stats,
         "preview": df.head(5).fillna("").to_dict(orient="records"),
+    }
+
+
+# ── Cross-CSV chart builder ─────────────────────────────────────
+def build_cross_csv_chart(
+    file_path_x: str | Path, col_x: str,
+    file_path_y: str | Path, col_y: str,
+    chart_type: str = "bar",
+    max_rows: int = 500000,
+) -> dict:
+    """Build a chart using X from one CSV and Y from another (no merge needed).
+
+    Rows are aligned by index (row 0 ↔ row 0, etc.) and
+    truncated to the shorter file.
+    """
+    df_x = pd.read_csv(file_path_x, low_memory=False)
+    df_x.columns = df_x.columns.str.strip()
+    df_y = pd.read_csv(file_path_y, low_memory=False)
+    df_y.columns = df_y.columns.str.strip()
+    
+    # Check row count limits
+    if len(df_x) > max_rows:
+        raise ValueError(f"X-axis CSV has {len(df_x):,} rows, exceeding the maximum of {max_rows:,} rows.")
+    if len(df_y) > max_rows:
+        raise ValueError(f"Y-axis CSV has {len(df_y):,} rows, exceeding the maximum of {max_rows:,} rows.")
+
+    if col_x not in df_x.columns:
+        raise ValueError(f"Column '{col_x}' not found in X-axis CSV")
+    if col_y not in df_y.columns:
+        raise ValueError(f"Column '{col_y}' not found in Y-axis CSV")
+
+    # Align on the shorter length
+    n = min(len(df_x), len(df_y))
+    sx = df_x[col_x].iloc[:n]
+    sy = df_y[col_y].iloc[:n]
+
+    title = f"{col_x} vs {col_y}"
+    base_opts = _base_options(title)
+
+    if chart_type == "scatter":
+        temp = pd.DataFrame({"x": sx, "y": sy}).dropna()
+        if len(temp) > MAX_SCATTER_POINTS:
+            temp = temp.sample(MAX_SCATTER_POINTS, random_state=42)
+        return {
+            "chart_type": "scatter",
+            "title": title,
+            "config": {
+                "type": "scatter",
+                "data": {
+                    "datasets": [{
+                        "label": title,
+                        "data": [{"x": float(r.x), "y": float(r.y)} for r in temp.itertuples()],
+                        "backgroundColor": PALETTE[0] + "88",
+                        "pointRadius": 3,
+                    }],
+                },
+                "options": base_opts,
+            },
+        }
+
+    # For bar / line: use X values as labels, Y as data
+    combined = pd.DataFrame({"x": sx, "y": sy}).dropna()
+
+    # If X is categorical-ish, aggregate Y by X
+    x_meta = classify_columns(pd.DataFrame({"x": combined["x"]}))
+    is_cat = x_meta.get("x", {}).get("dtype") == "categorical"
+
+    if is_cat:
+        agg = combined.groupby("x")["y"].mean()
+        if len(agg) > TOP_N_CATEGORIES:
+            agg = agg.nlargest(TOP_N_CATEGORIES)
+        labels = [str(l) for l in agg.index.tolist()]
+        values = agg.tolist()
+    else:
+        # Use raw aligned values (limit to first 200 for readability)
+        subset = combined.head(200)
+        labels = [str(v) for v in subset["x"].tolist()]
+        values = subset["y"].tolist()
+
+    dataset = {
+        "label": col_y,
+        "data": values,
+        "backgroundColor": [PALETTE[i % len(PALETTE)] + "cc" for i in range(len(values))],
+        "borderColor": PALETTE[0],
+        "borderWidth": 1,
+    }
+
+    if chart_type == "line":
+        dataset["fill"] = False
+        dataset["tension"] = 0.35
+        dataset["pointRadius"] = 2
+        dataset["backgroundColor"] = PALETTE[0] + "33"
+
+    cfg_type = chart_type if chart_type in ("bar", "line", "pie", "doughnut") else "bar"
+
+    if cfg_type in ("pie", "doughnut"):
+        return {
+            "chart_type": cfg_type,
+            "title": title,
+            "config": {
+                "type": cfg_type,
+                "data": {"labels": labels, "datasets": [dataset]},
+                "options": {
+                    **base_opts,
+                    "plugins": {**base_opts.get("plugins", {}),
+                                "legend": {"position": "right",
+                                           "labels": {"color": "#cbd5e1"}}},
+                },
+            },
+        }
+
+    return {
+        "chart_type": cfg_type,
+        "title": title,
+        "config": {
+            "type": cfg_type,
+            "data": {"labels": labels, "datasets": [dataset]},
+            "options": base_opts,
+        },
     }

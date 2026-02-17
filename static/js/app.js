@@ -42,7 +42,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
 /*  File management  */
 function addFiles(files) {
+    const MAX_FILE_SIZE_MB = 100;
+    const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
+    
     files.forEach((f) => {
+        // Check file size
+        if (f.size > MAX_FILE_SIZE_BYTES) {
+            const sizeMB = (f.size / (1024 * 1024)).toFixed(1);
+            toast(`File '${f.name}' is too large (${sizeMB}MB). Maximum allowed: ${MAX_FILE_SIZE_MB}MB`, "error");
+            return;
+        }
+        
         if (!selectedFiles.find((sf) => sf.name === f.name && sf.size === f.size)) {
             selectedFiles.push(f);
         }
@@ -135,7 +145,7 @@ function showPreview(data) {
     $("#preview-section").classList.remove("hidden");
     $("#preview-title").textContent = data.name;
 
-    // Data preview tables — ALL CSVs
+    // Data preview tables ï¿½ ALL CSVs
     const previewDiv = $("#data-preview");
     previewDiv.innerHTML = "";
 
@@ -158,7 +168,7 @@ function showPreview(data) {
             </div>`;
     });
 
-    // Summary stats — ALL CSVs
+    // Summary stats ï¿½ ALL CSVs
     const summaryDiv = $("#summary-section");
     if (summaryDiv && data.csv_files) {
         renderSummaryStats(data.csv_files, summaryDiv);
@@ -207,7 +217,7 @@ async function loadSingleDashboard(dashId) {
         });
         infoDiv.classList.remove("hidden");
 
-        // Summary stats — ALL CSVs
+        // Summary stats ï¿½ ALL CSVs
         const summaryDiv = $("#summary-section");
         if (summaryDiv) {
             loadAndRenderSummary(dashId, summaryDiv);
@@ -218,7 +228,7 @@ async function loadSingleDashboard(dashId) {
         chartsGrid.classList.remove("hidden");
         renderCharts(data.charts, "#charts-grid");
 
-        // Populate "Add Chart" column selectors — ALL CSVs
+        // Populate "Add Chart" column selectors ï¿½ ALL CSVs
         populateAddChartModal(data);
 
     } catch (err) {
@@ -379,6 +389,7 @@ function renderCharts(charts, gridSelector) {
         canvas.id = "chart-" + i;
         canvasWrap.appendChild(canvas);
         card.appendChild(canvasWrap);
+
         grid.appendChild(card);
 
         const cfgCopy = JSON.parse(JSON.stringify(cfg));
@@ -540,41 +551,52 @@ function switchChartType(index, newType) {
     ci.instance = newInstance;
 }
 
-/*  Add Custom Chart Modal — ALL CSVs  */
+/*  Add Custom Chart Modal â€“ supports cross-CSV charts  */
 function populateAddChartModal(data) {
-    var csvSelect = $("#custom-csv-select");
-    var colXSelect = $("#custom-col-x");
-    var colYSelect = $("#custom-col-y");
-    if (!colXSelect || !colYSelect) return;
+    var csvXSelect = $("#custom-csv-x");
+    var csvYSelect = $("#custom-csv-y");
+    if (!csvXSelect) return;
 
-    if (csvSelect) {
-        csvSelect.innerHTML = "";
-        (data.csv_files || []).forEach(function(cf, i) {
-            var fname = cf.original_filename || cf.filename;
-            var id = cf.id || cf.csv_file_id || "";
-            csvSelect.innerHTML += '<option value="' + esc(id) + '"' + (i === 0 ? ' selected' : '') + '>' + esc(fname) + '</option>';
-        });
+    var opts = "";
+    (data.csv_files || []).forEach(function(cf, i) {
+        var fname = cf.original_filename || cf.filename;
+        var id = cf.id || cf.csv_file_id || "";
+        opts += '<option value="' + esc(id) + '"' + (i === 0 ? ' selected' : '') + '>' + esc(fname) + '</option>';
+    });
+    csvXSelect.innerHTML = opts;
 
-        csvSelect.onchange = function() { populateColumnsForCSV(data, csvSelect.value); };
+    if (csvYSelect) {
+        csvYSelect.innerHTML = '<option value="">Same as X-axis</option>' + opts;
     }
 
-    var firstCsvId = data.csv_files && data.csv_files[0] ? (data.csv_files[0].id || data.csv_files[0].csv_file_id || "") : "";
-    populateColumnsForCSV(data, firstCsvId);
+    // Populate initial columns
+    populateColumnsForAxis("x");
+    populateColumnsForAxis("y");
 }
 
-function populateColumnsForCSV(data, csvFileId) {
-    var colXSelect = $("#custom-col-x");
-    var colYSelect = $("#custom-col-y");
-    if (!colXSelect || !colYSelect) return;
+function populateColumnsForAxis(axis) {
+    // axis = "x" or "y"
+    var csvSelect = $("#custom-csv-" + axis);
+    var colSelect = $("#custom-col-" + axis);
+    if (!colSelect) return;
 
-    colXSelect.innerHTML = '<option value="">Select column...</option>';
-    colYSelect.innerHTML = '<option value="">None (single column)</option>';
+    var csvFileId = csvSelect ? csvSelect.value : "";
+
+    // For Y-axis, if "Same as X-axis" is selected, use X's CSV
+    if (axis === "y" && !csvFileId) {
+        var csvXSelect = $("#custom-csv-x");
+        csvFileId = csvXSelect ? csvXSelect.value : "";
+    }
+
+    var defaultLabel = axis === "x" ? "Select column..." : "None (single column)";
+    colSelect.innerHTML = '<option value="">' + defaultLabel + '</option>';
+
+    if (!csvFileId || !dashboardData) return;
 
     var csvFile = null;
-    (data.csv_files || []).forEach(function(cf) {
+    (dashboardData.csv_files || []).forEach(function(cf) {
         if ((cf.id || cf.csv_file_id) === csvFileId) csvFile = cf;
     });
-    if (!csvFile && data.csv_files && data.csv_files[0]) csvFile = data.csv_files[0];
     if (!csvFile) return;
 
     var meta = typeof csvFile.columns_meta === "string" ? JSON.parse(csvFile.columns_meta) : csvFile.columns_meta;
@@ -584,9 +606,7 @@ function populateColumnsForCSV(data, csvFileId) {
         var col = entry[0];
         var info = entry[1];
         var typeLabel = info.dtype || "unknown";
-        var opt = '<option value="' + esc(col) + '">' + esc(col) + ' (' + typeLabel + ')</option>';
-        colXSelect.innerHTML += opt;
-        colYSelect.innerHTML += opt;
+        colSelect.innerHTML += '<option value="' + esc(col) + '">' + esc(col) + ' (' + typeLabel + ')</option>';
     });
 }
 
@@ -605,7 +625,8 @@ async function submitCustomChart() {
     var chartType = $("#custom-chart-type") ? $("#custom-chart-type").value : "";
     var colX = $("#custom-col-x") ? $("#custom-col-x").value : "";
     var colY = $("#custom-col-y") ? $("#custom-col-y").value : "";
-    var csvSelect = $("#custom-csv-select");
+    var csvXSelect = $("#custom-csv-x");
+    var csvYSelect = $("#custom-csv-y");
     var dashId = currentDashboardId || window.location.pathname.split("/").pop();
 
     if (!colX) {
@@ -618,13 +639,30 @@ async function submitCustomChart() {
         return;
     }
 
-    var csvFileId = csvSelect ? csvSelect.value : (dashboardData && dashboardData.csv_files && dashboardData.csv_files[0] ? dashboardData.csv_files[0].id : "");
+    var csvFileIdX = csvXSelect ? csvXSelect.value : "";
+    var csvFileIdY = csvYSelect ? csvYSelect.value : "";
 
-    var body = { chart_type: chartType, col_x: colX, csv_file_id: csvFileId };
-    if (colY) body.col_y = colY;
+    // Determine if cross-CSV (Y from different CSV than X)
+    var isCrossCSV = colY && csvFileIdY && csvFileIdY !== csvFileIdX;
+
+    var url, body;
+    if (isCrossCSV) {
+        url = "/api/dashboards/" + dashId + "/charts/cross";
+        body = {
+            chart_type: chartType,
+            csv_file_id_x: csvFileIdX,
+            col_x: colX,
+            csv_file_id_y: csvFileIdY,
+            col_y: colY,
+        };
+    } else {
+        url = "/api/dashboards/" + dashId + "/charts";
+        body = { chart_type: chartType, col_x: colX, csv_file_id: csvFileIdX };
+        if (colY) body.col_y = colY;
+    }
 
     try {
-        var res = await fetch("/api/dashboards/" + dashId + "/charts", {
+        var res = await fetch(url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body),
@@ -683,7 +721,7 @@ async function submitCustomChart() {
             canvasId: "chart-" + idx,
             cardId: "chart-card-" + idx,
             chartId: chart.id || null,
-            csvFileId: csvFileId,
+            csvFileId: csvFileIdX,
         });
 
         closeAddChartModal();
@@ -724,7 +762,7 @@ async function loadDashboards() {
                     + d.chart_count + ' charts</span>'
                     + '<span class="flex items-center gap-1">'
                     + '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>'
-                    + esc(d.csv_files || "—") + '</span>'
+                    + esc(d.csv_files || "ï¿½") + '</span>'
                     + '</div></div>';
             })
             .join("");
@@ -746,7 +784,7 @@ function exportCurrent(format) {
 
 function _doExport(dashId, format) {
     if (format === "pdf") {
-        toast("Preparing PDF — uses browser print", "success");
+        toast("Preparing PDF ï¿½ uses browser print", "success");
         window.print();
         return;
     }
@@ -804,7 +842,7 @@ function formatDate(dateStr) {
 }
 
 function formatNum(val) {
-    if (val === undefined || val === null) return "—";
+    if (val === undefined || val === null) return "ï¿½";
     if (typeof val === "number") return val.toLocaleString(undefined, { maximumFractionDigits: 2 });
     return String(val);
 }

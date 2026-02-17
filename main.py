@@ -10,15 +10,23 @@ from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse
 import pandas as pd
 
 import database as db
-from csv_analyzer import analyze_csv, build_custom_chart, compute_summary_stats, classify_columns
+from csv_analyzer import analyze_csv, build_custom_chart, build_cross_csv_chart, compute_summary_stats, classify_columns
 from data_cleaner import clean_dataframe, get_column_info
-from data_merger import merge_dataframes, preview_merge, find_common_columns, apply_column_mapping
+from data_merger import (
+    merge_dataframes, preview_merge, find_common_columns,
+    apply_column_mapping, detect_candidate_keys, auto_detect_relationships,
+    merge_by_relationships,
+)
 
 BASE_DIR = Path(__file__).parent
 UPLOADS_DIR = BASE_DIR / "uploads"
 UPLOADS_DIR.mkdir(exist_ok=True)
 MERGED_DIR = BASE_DIR / "merged"
 MERGED_DIR.mkdir(exist_ok=True)
+
+# File upload limits
+MAX_FILE_SIZE_MB = 100  # Maximum file size in MB
+MAX_ROW_COUNT = 500000  # Maximum number of rows per CSV
 
 app = FastAPI(title="Dashboard Generator")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
@@ -62,73 +70,7 @@ async def upload_csv(
     files: list[UploadFile] = File(...),
     dashboard_name: str = Form(None),
 ):
-    sid = _session(request, response)
-
-    if not files:
-        raise HTTPException(400, "No files uploaded")
-
-    # Auto-name dashboard
-    name = dashboard_name or f"Dashboard {pd.Timestamp.now().strftime('%b %d, %Y %H:%M')}"
-    dashboard_id = db.create_dashboard(sid, name)
-
-    all_charts = []
-    csv_infos = []
-
-    # Parse optional roles JSON from form data
-    roles_raw = None
-    form = await request.form()
-    roles_str = form.get("roles")
-    if roles_str:
-        try:
-            roles_raw = json.loads(roles_str)
-        except Exception:
-            roles_raw = None
-
-    for i, upload_file in enumerate(files):
-        if not upload_file.filename.lower().endswith(".csv"):
-            raise HTTPException(400, f"Only CSV files allowed: {upload_file.filename}")
-
-        stored_name = f"{uuid.uuid4().hex}_{upload_file.filename}"
-        file_path = UPLOADS_DIR / stored_name
-        with open(file_path, "wb") as f:
-            shutil.copyfileobj(upload_file.file, f)
-
-        try:
-            result = analyze_csv(str(file_path))
-        except Exception as e:
-            file_path.unlink(missing_ok=True)
-            raise HTTPException(422, f"Error analysing {upload_file.filename}: {str(e)}")
-
-        csv_id = db.save_csv_metadata(
-            dashboard_id, upload_file.filename, stored_name,
-            str(file_path), result["row_count"], result["col_count"], result["columns_meta"],
-        )
-        saved_charts = db.save_charts(dashboard_id, csv_id, result["charts"])
-
-        # Save CSV role
-        role = "primary" if i == 0 else "secondary"
-        if roles_raw and isinstance(roles_raw, list) and i < len(roles_raw):
-            role = roles_raw[i].get("role", role)
-        db.save_csv_role(csv_id, role, i)
-
-        csv_infos.append({
-            "id": csv_id,
-            "filename": upload_file.filename,
-            "role": role,
-            "rows": result["row_count"],
-            "cols": result["col_count"],
-            "preview": result["preview"],
-            "columns_meta": result["columns_meta"],
-            "summary_stats": result["summary_stats"],
-        })
-        all_charts.extend(saved_charts)
-
-    return {
-        "dashboard_id": dashboard_id,
-        "name": name,
-        "csv_files": csv_infos,
-        "charts": all_charts,
-    }
+    raise HTTPException(403, "Uploading new files is disabled.")
 
 
 # ── API: List dashboards ────────────────────────────────────────
@@ -197,6 +139,48 @@ async def add_custom_chart(dashboard_id: str, request: Request, response: Respon
 
     saved = db.save_charts(dashboard_id, csv_file["id"], [chart])
     # Return the saved chart with its DB id and csv_file_id
+    return saved[0] if saved else chart
+
+
+# ── API: Cross-CSV chart (X from one CSV, Y from another) ───────
+@app.post("/api/dashboards/{dashboard_id}/charts/cross")
+async def add_cross_csv_chart(dashboard_id: str, request: Request, response: Response):
+    sid = _session(request, response)
+    dash = db.get_dashboard(dashboard_id, sid)
+    if not dash:
+        raise HTTPException(404, "Dashboard not found")
+
+    body = await request.json()
+    chart_type = body.get("chart_type", "bar")
+    csv_file_id_x = body.get("csv_file_id_x")
+    col_x = body.get("col_x")
+    csv_file_id_y = body.get("csv_file_id_y")
+    col_y = body.get("col_y")
+
+    if not col_x or not col_y:
+        raise HTTPException(400, "col_x and col_y are required")
+    if not csv_file_id_x or not csv_file_id_y:
+        raise HTTPException(400, "csv_file_id_x and csv_file_id_y are required")
+
+    csv_x = next((cf for cf in dash["csv_files"] if cf["id"] == csv_file_id_x), None)
+    csv_y = next((cf for cf in dash["csv_files"] if cf["id"] == csv_file_id_y), None)
+    if not csv_x:
+        raise HTTPException(400, "X-axis CSV file not found")
+    if not csv_y:
+        raise HTTPException(400, "Y-axis CSV file not found")
+
+    try:
+        chart = build_cross_csv_chart(
+            csv_x["file_path"], col_x,
+            csv_y["file_path"], col_y,
+            chart_type,
+            MAX_ROW_COUNT,
+        )
+    except Exception as e:
+        raise HTTPException(422, str(e))
+
+    # Save under the X-axis CSV file
+    saved = db.save_charts(dashboard_id, csv_x["id"], [chart])
     return saved[0] if saved else chart
 
 
@@ -443,10 +427,12 @@ async def get_all_columns(dashboard_id: str, request: Request, response: Respons
         df = pd.read_csv(cf["file_path"], low_memory=False)
         df.columns = df.columns.str.strip()
         col_info = get_column_info(df)
+        keys = detect_candidate_keys(df, cf["original_filename"])
         files_info.append({
             "csv_file_id": cf["id"],
             "filename": cf["original_filename"],
             "columns": col_info,
+            "candidate_keys": keys,
         })
 
     common = []
@@ -456,7 +442,14 @@ async def get_all_columns(dashboard_id: str, request: Request, response: Respons
             d.columns = d.columns.str.strip()
         common = find_common_columns(dfs)
 
-    return {"files": files_info, "common_columns": common}
+    # Auto-detect relationships
+    suggested_relationships = auto_detect_relationships(files_info)
+
+    return {
+        "files": files_info,
+        "common_columns": common,
+        "suggested_relationships": suggested_relationships,
+    }
 
 
 # ── API: Preview merge ───────────────────────────────────────────
@@ -560,7 +553,89 @@ async def merge_csvs(dashboard_id: str, request: Request, response: Response):
 
     # Auto-generate charts on merged data
     try:
-        result = analyze_csv(str(merged_path))
+        result = analyze_csv(str(merged_path), MAX_ROW_COUNT)
+        saved_charts = db.save_charts(dashboard_id, merged_csv_id, result["charts"])
+        merged_charts = saved_charts
+    except Exception:
+        merged_charts = []
+
+    return {
+        "merge_id": merge_id,
+        "merged_csv_id": merged_csv_id,
+        "rows": len(merged_df),
+        "cols": len(merged_df.columns),
+        "columns_info": col_info,
+        "merge_log": merge_log,
+        "charts": merged_charts,
+        "preview": merged_df.head(10).fillna("").to_dict(orient="records"),
+    }
+
+
+# ── API: Relationship-based merge ────────────────────────────────
+@app.post("/api/dashboards/{dashboard_id}/merge/relationships")
+async def merge_by_relationships_endpoint(dashboard_id: str, request: Request, response: Response):
+    """
+    Merge CSVs using pairwise FK→PK relationships instead of
+    requiring a single set of common columns across all files.
+    """
+    sid = _session(request, response)
+    dash = db.get_dashboard(dashboard_id, sid)
+    if not dash:
+        raise HTTPException(404)
+
+    body = await request.json()
+    relationships = body.get("relationships", [])
+    how = body.get("how", "inner")
+    column_mappings_raw = body.get("column_mappings", {})
+
+    if not relationships:
+        raise HTTPException(400, "At least one relationship is required")
+
+    # Load all CSVs into a map: csv_file_id → DataFrame
+    dfs_map: dict[str, pd.DataFrame] = {}
+    for cf in dash["csv_files"]:
+        df = pd.read_csv(cf["file_path"], low_memory=False)
+        df.columns = df.columns.str.strip()
+        dfs_map[cf["id"]] = df
+
+    # column_mappings_raw: { csv_file_id: { old: new, … }, … }
+    try:
+        merged_df, merge_log = merge_by_relationships(
+            dfs_map, relationships, how=how,
+            column_mappings=column_mappings_raw if column_mappings_raw else None,
+        )
+    except Exception as e:
+        raise HTTPException(422, str(e))
+
+    # Save merged CSV
+    merged_filename = f"{uuid.uuid4().hex}_merged.csv"
+    merged_path = MERGED_DIR / merged_filename
+    merged_df.to_csv(str(merged_path), index=False)
+
+    col_info = get_column_info(merged_df)
+
+    merge_id = db.save_merge_session(
+        dashboard_id=dashboard_id,
+        merge_keys=[],
+        join_type=how,
+        column_mappings=column_mappings_raw,
+        cleaning_log=[],
+        merge_log=merge_log,
+        merged_file_path=str(merged_path),
+        row_count=len(merged_df),
+        col_count=len(merged_df.columns),
+        columns_info=col_info,
+    )
+
+    merged_csv_id = db.save_csv_metadata(
+        dashboard_id, "merged_data.csv", merged_filename,
+        str(merged_path), len(merged_df), len(merged_df.columns),
+        classify_columns(merged_df),
+    )
+
+    # Auto-generate charts on merged data
+    try:
+        result = analyze_csv(str(merged_path), MAX_ROW_COUNT)
         saved_charts = db.save_charts(dashboard_id, merged_csv_id, result["charts"])
         merged_charts = saved_charts
     except Exception:

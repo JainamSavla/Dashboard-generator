@@ -46,7 +46,6 @@
             </div>
             <p class="text-sm text-slate-400 mb-4 ml-11">Remove duplicates, handle missing values, cap outliers, and standardise data.</p>
 
-            <!-- Cleaning options -->
             <div class="ml-11 bg-slate-900 rounded-xl border border-slate-800 p-5 mb-4">
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
                     <div>
@@ -80,63 +79,117 @@
                 </button>
             </div>
 
-            <!-- Cleaning results -->
             <div id="clean-results" class="hidden ml-11 space-y-4"></div>
         </section>
 
-        <!-- Step 2: Column Mapping -->
-        <section id="step-mapping" class="hidden mb-10">
+        <!-- Step 2: Relationship Builder -->
+        <section id="step-relationships" class="hidden mb-10">
             <div class="flex items-center gap-3 mb-4">
                 <div class="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-white font-bold text-sm">2</div>
-                <h2 class="text-xl font-bold text-white">Column Mapping</h2>
+                <h2 class="text-xl font-bold text-white">Define Relationships</h2>
             </div>
-            <p class="text-sm text-slate-400 mb-4 ml-11">If column names differ across CSVs, map them so they can be merged on the same key.</p>
+            <p class="text-sm text-slate-400 mb-3 ml-11">
+                Map primary keys (PK) and foreign keys (FK) across your CSVs. The system auto-detects candidate keys.
+                Click columns in the ER diagram to link them, or use the form below.
+            </p>
+
+            <!-- ER Diagram -->
+            <div class="ml-11 mb-6">
+                <div class="flex items-center gap-2 mb-2">
+                    <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"/></svg>
+                    <span class="text-sm font-semibold text-white">Entity-Relationship Diagram</span>
+                    <span class="text-xs text-slate-500 ml-2">Drag tables to reposition. Click a column → click another column to link them.</span>
+                </div>
+                <div id="er-diagram" class="er-canvas-wrap" style="height:420px;">
+                    <svg id="er-lines" class="er-svg-overlay"></svg>
+                    <!-- table boxes rendered by JS -->
+                </div>
+            </div>
+
+            <!-- Legend -->
+            <div class="ml-11 mb-4 flex items-center gap-4 text-xs">
+                <span class="flex items-center gap-1"><span class="er-key-badge pk">PK</span> Primary Key (unique)</span>
+                <span class="flex items-center gap-1"><span class="er-key-badge fk">FK</span> Foreign Key</span>
+                <span class="flex items-center gap-1">
+                    <svg width="20" height="10"><line x1="0" y1="5" x2="20" y2="5" stroke="#6366f1" stroke-width="2" stroke-dasharray="4 2"/></svg>
+                    Relationship
+                </span>
+            </div>
+
+            <!-- Detected & user-defined relationships -->
+            <div class="ml-11 mb-4">
+                <h3 class="text-sm font-semibold text-white mb-2">Relationships</h3>
+                <div id="relationships-list" class="space-y-2 mb-3"></div>
+
+                <!-- Add relationship form -->
+                <div class="rel-add-form" id="add-rel-form">
+                    <select id="rel-from-csv" class="modal-select text-xs" onchange="populateRelColumns('rel-from-col', this.value)">
+                        <option value="">From CSV…</option>
+                    </select>
+                    <select id="rel-from-col" class="modal-select text-xs">
+                        <option value="">Column…</option>
+                    </select>
+                    <span class="text-indigo-400 font-bold text-center">↔</span>
+                    <select id="rel-to-csv" class="modal-select text-xs" onchange="populateRelColumns('rel-to-col', this.value)">
+                        <option value="">To CSV…</option>
+                    </select>
+                    <select id="rel-to-col" class="modal-select text-xs">
+                        <option value="">Column…</option>
+                    </select>
+                    <button onclick="addRelationshipFromForm()" class="add-chart-btn text-xs" style="padding:0.4rem 0.8rem">
+                        + Add
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Step 3: Column Mapping (optional rename) -->
+        <section id="step-mapping" class="hidden mb-10">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-white font-bold text-sm">3</div>
+                <h2 class="text-xl font-bold text-white">Column Mapping <span class="text-xs text-slate-500 font-normal">(optional)</span></h2>
+            </div>
+            <p class="text-sm text-slate-400 mb-4 ml-11">Rename columns before merging if needed. Usually not required when using relationship-based merge.</p>
             <div id="mapping-area" class="ml-11 space-y-4"></div>
         </section>
 
-        <!-- Step 3: Merge -->
+        <!-- Step 4: Merge -->
         <section id="step-merge" class="hidden mb-10">
             <div class="flex items-center gap-3 mb-4">
-                <div class="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-white font-bold text-sm">3</div>
+                <div class="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-white font-bold text-sm">4</div>
                 <h2 class="text-xl font-bold text-white">Merge Data</h2>
             </div>
-            <p class="text-sm text-slate-400 mb-4 ml-11">Select merge keys and join type to combine your datasets.</p>
+            <p class="text-sm text-slate-400 mb-4 ml-11">Choose join type and merge your datasets using the defined relationships.</p>
 
             <div class="ml-11 bg-slate-900 rounded-xl border border-slate-800 p-5 mb-4">
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                    <div>
-                        <label class="block text-xs font-medium text-slate-400 mb-1">Merge Key(s)</label>
-                        <div id="merge-keys-list" class="space-y-2"></div>
-                        <p class="text-xs text-slate-600 mt-1">Select column(s) common to all CSVs</p>
-                    </div>
                     <div>
                         <label class="block text-xs font-medium text-slate-400 mb-1">Join Type</label>
                         <select id="merge-how" class="modal-select">
                             <option value="inner" selected>Inner Join — only matching rows</option>
                             <option value="left">Left Join — keep all from first CSV</option>
-                            <option value="right">Right Join — keep all from second CSV</option>
+                            <option value="right">Right Join — keep all from last CSV</option>
                             <option value="outer">Outer Join — keep all rows</option>
                         </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Relationships to use</label>
+                        <p id="merge-rel-summary" class="text-sm text-slate-300 mt-1">0 relationships defined</p>
                     </div>
                 </div>
 
                 <div class="flex gap-3">
-                    <button onclick="previewMerge()" class="export-btn bg-blue-600/20 text-blue-400 hover:bg-blue-600/30">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-                        Preview Merge
-                    </button>
-                    <button onclick="executeMerge()" class="add-chart-btn">
+                    <button onclick="executeRelationshipMerge()" class="add-chart-btn">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
                         Merge & Generate Charts
                     </button>
                 </div>
             </div>
 
-            <!-- Merge preview -->
             <div id="merge-preview" class="hidden ml-11 mb-4"></div>
         </section>
 
-        <!-- Step 4: Results -->
+        <!-- Step 5: Results -->
         <section id="step-results" class="hidden mb-10">
             <div class="flex items-center gap-3 mb-4">
                 <div class="w-8 h-8 rounded-full bg-emerald-600 flex items-center justify-center text-white font-bold text-sm">✓</div>
@@ -144,7 +197,6 @@
             </div>
             <div id="merge-results-info" class="ml-11 mb-4"></div>
             <div id="merge-log" class="ml-11 mb-6"></div>
-
             <div id="merged-preview" class="ml-11 mb-6"></div>
 
             <div class="ml-11 flex gap-3 mb-6">
@@ -157,7 +209,6 @@
                 </a>
             </div>
 
-            <!-- Merged Charts -->
             <div id="merged-charts-grid" class="ml-11 grid grid-cols-1 lg:grid-cols-2 gap-6"></div>
         </section>
     </main>
