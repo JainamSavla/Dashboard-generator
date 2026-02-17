@@ -62,8 +62,71 @@
         <!-- CSV Info Cards -->
         <div id="csv-info" class="hidden grid grid-cols-1 md:grid-cols-3 gap-4 mb-8"></div>
 
+        <!-- Summary Statistics -->
+        <div id="summary-section" class="hidden mb-8"></div>
+
+        <!-- Add Chart Button -->
+        <div class="flex items-center justify-between mb-4">
+            <h2 class="text-lg font-semibold text-slate-300">Charts</h2>
+            <button onclick="openAddChartModal()" class="add-chart-btn">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                Add Chart
+            </button>
+        </div>
+
         <!-- Charts Grid -->
         <div id="charts-grid" class="hidden grid grid-cols-1 lg:grid-cols-2 gap-6"></div>
+
+        <!-- Add Chart Modal -->
+        <div id="add-chart-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center">
+            <div class="modal-overlay" onclick="closeAddChartModal()"></div>
+            <div class="modal-content">
+                <div class="flex items-center justify-between mb-6">
+                    <h3 class="text-lg font-bold text-white">Add Custom Chart</h3>
+                    <button onclick="closeAddChartModal()" class="text-slate-400 hover:text-white transition">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                </div>
+
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-400 mb-1.5">Chart Type</label>
+                        <select id="custom-chart-type" class="modal-select">
+                            <option value="bar">Bar Chart</option>
+                            <option value="line">Line Chart</option>
+                            <option value="pie">Pie Chart</option>
+                            <option value="doughnut">Doughnut Chart</option>
+                            <option value="scatter">Scatter Plot</option>
+                            <option value="histogram">Histogram</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-slate-400 mb-1.5">Primary Column (X-axis)</label>
+                        <select id="custom-col-x" class="modal-select">
+                            <option value="">Select column...</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-slate-400 mb-1.5">Secondary Column (Y-axis, optional)</label>
+                        <select id="custom-col-y" class="modal-select">
+                            <option value="">None (single column)</option>
+                        </select>
+                        <p class="text-xs text-slate-600 mt-1">Required for scatter plots and line charts with two variables</p>
+                    </div>
+
+                    <div class="flex gap-3 pt-2">
+                        <button onclick="submitCustomChart()" class="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2.5 rounded-lg transition">
+                            Create Chart
+                        </button>
+                        <button onclick="closeAddChartModal()" class="px-6 bg-slate-700 hover:bg-slate-600 text-slate-300 font-semibold py-2.5 rounded-lg transition">
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
     </main>
 
     <script src="/static/js/app.js"></script>

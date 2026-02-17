@@ -251,6 +251,80 @@ def _base_options(title: str) -> dict:
     }
 
 
+def compute_summary_stats(df: pd.DataFrame, col_meta: dict) -> list[dict]:
+    """Compute mean, median, min, max, std, Q1, Q3 for numeric columns."""
+    numeric_cols = [c for c, m in col_meta.items() if m["dtype"] == "numeric"]
+    stats = []
+    for col in numeric_cols:
+        s = df[col].dropna()
+        if s.empty:
+            continue
+        stats.append({
+            "column": col,
+            "count": int(s.count()),
+            "mean": round(float(s.mean()), 2),
+            "median": round(float(s.median()), 2),
+            "std": round(float(s.std()), 2),
+            "min": round(float(s.min()), 2),
+            "max": round(float(s.max()), 2),
+            "q1": round(float(s.quantile(0.25)), 2),
+            "q3": round(float(s.quantile(0.75)), 2),
+            "missing": int(df[col].isna().sum()),
+        })
+    return stats
+
+
+def build_custom_chart(file_path: str | Path, chart_type: str,
+                       col_x: str, col_y: str | None = None) -> dict:
+    """Generate a single chart config from user-selected columns + type."""
+    df = pd.read_csv(file_path, low_memory=False)
+    df.columns = df.columns.str.strip()
+    col_meta = classify_columns(df)
+
+    # Validate columns exist
+    if col_x not in df.columns:
+        raise ValueError(f"Column '{col_x}' not found")
+    if col_y and col_y not in df.columns:
+        raise ValueError(f"Column '{col_y}' not found")
+
+    idx = 0
+    if chart_type == "bar":
+        if col_meta.get(col_x, {}).get("dtype") == "numeric":
+            return _histogram(df, col_x, col_meta.get(col_x, {}), idx)
+        return _bar_chart(df, col_x, col_meta.get(col_x, {}), idx)
+    elif chart_type == "line":
+        if col_y:
+            return _line_chart(df, col_x, col_y, idx)
+        # Single numeric col over index
+        series = df[col_x].dropna()
+        return {
+            "chart_type": "line",
+            "title": f"{col_x} Trend",
+            "config": {
+                "type": "line",
+                "data": {
+                    "labels": list(range(len(series))),
+                    "datasets": [{"label": col_x, "data": series.tolist(),
+                                  "borderColor": PALETTE[0], "backgroundColor": PALETTE[0] + "33",
+                                  "fill": True, "tension": 0.35, "pointRadius": 2}],
+                },
+                "options": _base_options(f"{col_x} Trend"),
+            },
+        }
+    elif chart_type in ("pie", "doughnut"):
+        return _pie_chart(df, col_x, col_meta.get(col_x, {}), idx)
+    elif chart_type == "scatter":
+        if not col_y:
+            raise ValueError("Scatter plots require two columns")
+        temp = df[[col_x, col_y]].dropna()
+        corr = float(temp[col_x].corr(temp[col_y])) if len(temp) > 1 else 0
+        return _scatter_chart(df, col_x, col_y, corr, idx)
+    elif chart_type == "histogram":
+        return _histogram(df, col_x, col_meta.get(col_x, {}), idx)
+    else:
+        raise ValueError(f"Unsupported chart type: {chart_type}")
+
+
 def analyze_csv(file_path: str | Path) -> dict:
     """Main entry: read CSV, classify columns, generate chart configs."""
     df = pd.read_csv(file_path, low_memory=False)
@@ -297,10 +371,14 @@ def analyze_csv(file_path: str | Path) -> dict:
     if summary:
         charts.append(summary)
 
+    # 6. Summary statistics table data
+    summary_stats = compute_summary_stats(df, col_meta)
+
     return {
         "row_count": len(df),
         "col_count": len(df.columns),
         "columns_meta": col_meta,
         "charts": charts,
+        "summary_stats": summary_stats,
         "preview": df.head(5).fillna("").to_dict(orient="records"),
     }

@@ -24,14 +24,108 @@
     background: #1e293b;
     border-radius: 12px;
     padding: 1.2rem;
-    height: 380px;
+    height: 420px;
     border: 1px solid #334155;
     transition: border-color 0.2s, box-shadow 0.2s;
+    display: flex;
+    flex-direction: column;
 }
 .chart-card:hover {
     border-color: #475569;
     box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
 }
+
+/* Chart header with type switcher */
+.chart-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+    flex-shrink: 0;
+}
+.chart-title-text {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #94a3b8;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    margin-right: 0.5rem;
+}
+.chart-type-select {
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    color: #cbd5e1;
+    font-size: 0.7rem;
+    padding: 0.25rem 0.5rem;
+    cursor: pointer;
+    outline: none;
+    flex-shrink: 0;
+    transition: border-color 0.15s;
+}
+.chart-type-select:hover { border-color: #6366f1; }
+.chart-type-select:focus { border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2); }
+
+.chart-canvas-wrap {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+}
+.chart-canvas-wrap canvas {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+/* Add Chart button */
+.add-chart-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+    font-size: 0.813rem;
+    font-weight: 600;
+    background: #6366f1;
+    color: white;
+    border: none;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.add-chart-btn:hover { background: #818cf8; transform: translateY(-1px); }
+
+/* Modal */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+}
+.modal-content {
+    position: relative;
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 16px;
+    padding: 1.5rem;
+    width: 100%;
+    max-width: 440px;
+    z-index: 10;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+.modal-select {
+    width: 100%;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    color: #e2e8f0;
+    font-size: 0.875rem;
+    padding: 0.6rem 0.8rem;
+    outline: none;
+    cursor: pointer;
+    transition: border-color 0.15s;
+}
+.modal-select:focus { border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2); }
 
 /* Export buttons */
 .export-btn {

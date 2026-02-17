@@ -1,11 +1,16 @@
 /* ── State ───────────────────────────────────────────────────── */
 let selectedFiles = [];
 let currentDashboardId = null;
-const chartInstances = [];
+const chartInstances = [];      // {instance, originalConfig, canvasId, cardId}
+let dashboardData = null;       // full dashboard data for custom chart building
 
 /* ── DOM refs ────────────────────────────────────────────────── */
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
+
+/* compatible chart types for switching */
+const SWITCHABLE_TYPES = ["bar", "line", "pie", "doughnut", "polarArea", "radar"];
+const POINT_CHART_TYPES = ["scatter", "bubble"];
 
 /* ── Init (runs on index.html only) ──────────────────────────── */
 document.addEventListener("DOMContentLoaded", () => {
@@ -13,9 +18,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const fileInput = $("#file-input");
     const uploadBtn = $("#upload-btn");
 
-    if (!dropZone) return; // dashboard.html page
+    if (!dropZone) return;
 
-    // Drag & drop
     ["dragenter", "dragover"].forEach((e) =>
         dropZone.addEventListener(e, (ev) => { ev.preventDefault(); dropZone.classList.add("drag-over"); })
     );
@@ -33,8 +37,6 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     uploadBtn.addEventListener("click", handleUpload);
-
-    // Load saved dashboards
     loadDashboards();
 });
 
@@ -81,7 +83,6 @@ async function handleUpload() {
     const name = $("#dashboard-name").value.trim();
     if (name) formData.append("dashboard_name", name);
 
-    // Show loading
     $("#upload-section").classList.add("hidden");
     $("#loading").classList.remove("hidden");
     $("#preview-section").classList.add("hidden");
@@ -94,8 +95,8 @@ async function handleUpload() {
         }
         const data = await res.json();
         currentDashboardId = data.dashboard_id;
+        dashboardData = data;
 
-        // Show preview
         showPreview(data);
         toast("Dashboard generated!", "success");
         loadDashboards();
@@ -110,7 +111,7 @@ async function handleUpload() {
     }
 }
 
-/* ── Show dashboard preview ──────────────────────────────────── */
+/* ── Show dashboard preview (index.html) ─────────────────────── */
 function showPreview(data) {
     $("#upload-section").classList.remove("hidden");
     $("#preview-section").classList.remove("hidden");
@@ -138,6 +139,12 @@ function showPreview(data) {
         previewDiv.innerHTML = "";
     }
 
+    // Summary stats
+    const summaryDiv = $("#summary-section");
+    if (summaryDiv && data.csv_files) {
+        renderSummaryStats(data.csv_files, summaryDiv);
+    }
+
     renderCharts(data.charts, "#charts-grid");
 }
 
@@ -148,8 +155,8 @@ async function loadSingleDashboard(dashId) {
         const res = await fetch(`/api/dashboards/${dashId}`);
         if (!res.ok) throw new Error("Dashboard not found");
         const data = await res.json();
+        dashboardData = data;
 
-        // Populate header
         $("#dash-title").textContent = data.name;
         $("#dash-meta").textContent = `Created ${formatDate(data.created_at)} · ${data.charts.length} charts`;
 
@@ -177,10 +184,20 @@ async function loadSingleDashboard(dashId) {
         });
         infoDiv.classList.remove("hidden");
 
+        // Summary stats
+        const summaryDiv = $("#summary-section");
+        if (summaryDiv) {
+            loadAndRenderSummary(dashId, summaryDiv);
+        }
+
         // Charts
         const chartsGrid = $("#charts-grid");
         chartsGrid.classList.remove("hidden");
         renderCharts(data.charts, "#charts-grid");
+
+        // Populate "Add Chart" column selectors
+        populateAddChartModal(data);
+
     } catch (err) {
         toast(err.message, "error");
     } finally {
@@ -188,33 +205,315 @@ async function loadSingleDashboard(dashId) {
     }
 }
 
-/* ── Render charts into a grid ───────────────────────────────── */
+/* ── Summary Stats ───────────────────────────────────────────── */
+async function loadAndRenderSummary(dashId, container) {
+    try {
+        const res = await fetch(`/api/dashboards/${dashId}/summary`);
+        if (!res.ok) return;
+        const summaryData = await res.json();
+        renderSummaryFromAPI(summaryData, container);
+    } catch (err) {
+        console.error("Failed to load summary:", err);
+    }
+}
+
+function renderSummaryFromAPI(summaryData, container) {
+    container.innerHTML = "";
+    if (!summaryData || summaryData.length === 0) {
+        container.classList.add("hidden");
+        return;
+    }
+    container.classList.remove("hidden");
+
+    summaryData.forEach((fileStats) => {
+        if (!fileStats.stats || fileStats.stats.length === 0) return;
+        container.innerHTML += buildSummaryTable(fileStats.filename, fileStats.stats);
+    });
+}
+
+function renderSummaryStats(csvFiles, container) {
+    container.innerHTML = "";
+    let hasStats = false;
+
+    csvFiles.forEach((cf) => {
+        const stats = cf.summary_stats;
+        if (!stats || stats.length === 0) return;
+        hasStats = true;
+        container.innerHTML += buildSummaryTable(cf.filename, stats);
+    });
+
+    if (hasStats) {
+        container.classList.remove("hidden");
+    } else {
+        container.classList.add("hidden");
+    }
+}
+
+function buildSummaryTable(filename, stats) {
+    const fields = [
+        { key: "count", label: "Count" },
+        { key: "mean", label: "Mean" },
+        { key: "median", label: "Median" },
+        { key: "std", label: "Std Dev" },
+        { key: "min", label: "Min" },
+        { key: "q1", label: "Q1 (25%)" },
+        { key: "q3", label: "Q3 (75%)" },
+        { key: "max", label: "Max" },
+        { key: "missing", label: "Missing" },
+    ];
+
+    return `
+        <div class="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
+            <div class="px-4 py-3 border-b border-slate-800 flex items-center gap-2">
+                <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
+                <span class="text-sm font-medium text-slate-300">Summary Statistics</span>
+                <span class="text-xs text-slate-600">${esc(filename)}</span>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="preview-table">
+                    <thead>
+                        <tr>
+                            <th>Column</th>
+                            ${fields.map((f) => `<th>${f.label}</th>`).join("")}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${stats.map((s) => `
+                            <tr>
+                                <td class="font-medium text-indigo-300">${esc(s.column)}</td>
+                                ${fields.map((f) => `<td>${formatNum(s[f.key])}</td>`).join("")}
+                            </tr>
+                        `).join("")}
+                    </tbody>
+                </table>
+            </div>
+        </div>`;
+}
+
+/* ── Render charts with type switcher ────────────────────────── */
 function renderCharts(charts, gridSelector) {
     const grid = $(gridSelector);
     grid.innerHTML = "";
 
-    // Destroy existing chart instances
-    chartInstances.forEach((c) => c.destroy());
+    chartInstances.forEach((ci) => ci.instance.destroy());
     chartInstances.length = 0;
 
     charts.forEach((chart, i) => {
         const cfg = chart.config || chart;
         const card = document.createElement("div");
         card.className = "chart-card";
+        card.id = `chart-card-${i}`;
 
-        // Make doughnut/pie cards span full width on their own
-        if (cfg.type === "scatter") {
-            card.classList.add("lg:col-span-1");
-        }
+        // Chart type switcher dropdown
+        const isPointChart = POINT_CHART_TYPES.includes(cfg.type);
+        const availableTypes = isPointChart ? ["scatter"] : SWITCHABLE_TYPES;
 
+        const header = document.createElement("div");
+        header.className = "chart-header";
+        header.innerHTML = `
+            <span class="chart-title-text">${esc(chart.title || cfg.plugins?.title?.text || "Chart")}</span>
+            <select class="chart-type-select" data-chart-index="${i}" onchange="switchChartType(${i}, this.value)">
+                ${availableTypes.map((t) => `<option value="${t}" ${t === cfg.type ? "selected" : ""}>${capitalise(t)}</option>`).join("")}
+            </select>
+        `;
+        card.appendChild(header);
+
+        const canvasWrap = document.createElement("div");
+        canvasWrap.className = "chart-canvas-wrap";
         const canvas = document.createElement("canvas");
         canvas.id = `chart-${i}`;
-        card.appendChild(canvas);
+        canvasWrap.appendChild(canvas);
+        card.appendChild(canvasWrap);
         grid.appendChild(card);
 
-        const instance = new Chart(canvas.getContext("2d"), JSON.parse(JSON.stringify(cfg)));
-        chartInstances.push(instance);
+        const cfgCopy = JSON.parse(JSON.stringify(cfg));
+        const instance = new Chart(canvas.getContext("2d"), cfgCopy);
+        chartInstances.push({
+            instance,
+            originalConfig: JSON.parse(JSON.stringify(cfg)),
+            canvasId: `chart-${i}`,
+            cardId: `chart-card-${i}`,
+        });
     });
+}
+
+/* ── Switch chart type ───────────────────────────────────────── */
+function switchChartType(index, newType) {
+    const ci = chartInstances[index];
+    if (!ci) return;
+
+    const origCfg = JSON.parse(JSON.stringify(ci.originalConfig));
+
+    // Don't switch scatter ↔ label-based charts (incompatible data shapes)
+    if (POINT_CHART_TYPES.includes(origCfg.type) && !POINT_CHART_TYPES.includes(newType)) return;
+
+    origCfg.type = newType;
+
+    // Adjust options for pie/doughnut/polarArea (no x/y scales)
+    const noScaleTypes = ["pie", "doughnut", "polarArea"];
+    if (noScaleTypes.includes(newType)) {
+        delete origCfg.options?.scales;
+        if (origCfg.options?.indexAxis) delete origCfg.options.indexAxis;
+        if (origCfg.options?.plugins?.legend) {
+            origCfg.options.plugins.legend.position = "right";
+        }
+    } else if (newType === "radar") {
+        // Radar uses radial scales
+        if (origCfg.options) {
+            delete origCfg.options.scales;
+            origCfg.options.scales = {
+                r: { ticks: { color: "#94a3b8" }, grid: { color: "#334155" }, pointLabels: { color: "#cbd5e1" } },
+            };
+        }
+    } else {
+        // Restore x/y scales if missing
+        if (!origCfg.options) origCfg.options = {};
+        if (!origCfg.options.scales) {
+            origCfg.options.scales = {
+                x: { ticks: { color: "#94a3b8" }, grid: { color: "#334155" } },
+                y: { ticks: { color: "#94a3b8" }, grid: { color: "#334155" } },
+            };
+        }
+    }
+
+    // For line charts, add tension
+    if (newType === "line") {
+        origCfg.data.datasets.forEach((ds) => {
+            ds.tension = ds.tension || 0.35;
+            ds.fill = ds.fill !== undefined ? ds.fill : false;
+            ds.pointRadius = ds.pointRadius || 3;
+        });
+    }
+
+    // Destroy old & create new
+    ci.instance.destroy();
+    const canvas = $(`#${ci.canvasId}`);
+    const newInstance = new Chart(canvas.getContext("2d"), origCfg);
+    ci.instance = newInstance;
+}
+
+/* ── Add Custom Chart Modal ──────────────────────────────────── */
+function populateAddChartModal(data) {
+    const colXSelect = $("#custom-col-x");
+    const colYSelect = $("#custom-col-y");
+    if (!colXSelect || !colYSelect) return;
+
+    colXSelect.innerHTML = '<option value="">Select column...</option>';
+    colYSelect.innerHTML = '<option value="">None (single column)</option>';
+
+    const csvFile = data.csv_files?.[0];
+    if (!csvFile) return;
+
+    const meta = typeof csvFile.columns_meta === "string" ? JSON.parse(csvFile.columns_meta) : csvFile.columns_meta;
+    if (!meta) return;
+
+    Object.entries(meta).forEach(([col, info]) => {
+        const typeLabel = info.dtype || "unknown";
+        const opt = `<option value="${esc(col)}">${esc(col)} (${typeLabel})</option>`;
+        colXSelect.innerHTML += opt;
+        colYSelect.innerHTML += opt;
+    });
+}
+
+function openAddChartModal() {
+    const modal = $("#add-chart-modal");
+    if (modal) modal.classList.remove("hidden");
+    if (dashboardData) populateAddChartModal(dashboardData);
+}
+
+function closeAddChartModal() {
+    const modal = $("#add-chart-modal");
+    if (modal) modal.classList.add("hidden");
+}
+
+async function submitCustomChart() {
+    const chartType = $("#custom-chart-type")?.value;
+    const colX = $("#custom-col-x")?.value;
+    const colY = $("#custom-col-y")?.value;
+    const dashId = currentDashboardId || window.location.pathname.split("/").pop();
+
+    if (!colX) {
+        toast("Please select at least one column", "error");
+        return;
+    }
+
+    if (chartType === "scatter" && !colY) {
+        toast("Scatter plots require two columns", "error");
+        return;
+    }
+
+    const csvFileId = dashboardData?.csv_files?.[0]?.id;
+
+    const body = { chart_type: chartType, col_x: colX, csv_file_id: csvFileId };
+    if (colY) body.col_y = colY;
+
+    try {
+        const res = await fetch(`/api/dashboards/${dashId}/charts`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || "Failed to create chart");
+        }
+        const chart = await res.json();
+
+        // Add chart to the grid dynamically
+        const grid = $("#charts-grid");
+        const idx = chartInstances.length;
+        const cfg = chart.config || chart;
+
+        const card = document.createElement("div");
+        card.className = "chart-card";
+        card.id = `chart-card-${idx}`;
+
+        const isPointChart = POINT_CHART_TYPES.includes(cfg.type);
+        const availableTypes = isPointChart ? ["scatter"] : SWITCHABLE_TYPES;
+
+        const header = document.createElement("div");
+        header.className = "chart-header";
+        header.innerHTML = `
+            <span class="chart-title-text">${esc(chart.title || "Custom Chart")}</span>
+            <select class="chart-type-select" data-chart-index="${idx}" onchange="switchChartType(${idx}, this.value)">
+                ${availableTypes.map((t) => `<option value="${t}" ${t === cfg.type ? "selected" : ""}>${capitalise(t)}</option>`).join("")}
+            </select>
+        `;
+        card.appendChild(header);
+
+        const canvasWrap = document.createElement("div");
+        canvasWrap.className = "chart-canvas-wrap";
+        const canvas = document.createElement("canvas");
+        canvas.id = `chart-${idx}`;
+        canvasWrap.appendChild(canvas);
+        card.appendChild(canvasWrap);
+
+        grid.appendChild(card);
+
+        // Animate in
+        card.style.opacity = "0";
+        card.style.transform = "translateY(20px)";
+        requestAnimationFrame(() => {
+            card.style.transition = "all 0.3s ease";
+            card.style.opacity = "1";
+            card.style.transform = "translateY(0)";
+        });
+
+        const cfgCopy = JSON.parse(JSON.stringify(cfg));
+        const instance = new Chart(canvas.getContext("2d"), cfgCopy);
+        chartInstances.push({
+            instance,
+            originalConfig: JSON.parse(JSON.stringify(cfg)),
+            canvasId: `chart-${idx}`,
+            cardId: `chart-card-${idx}`,
+        });
+
+        closeAddChartModal();
+        toast("Chart added!", "success");
+        card.scrollIntoView({ behavior: "smooth", block: "center" });
+    } catch (err) {
+        toast(err.message, "error");
+    }
 }
 
 /* ── Load dashboards list ────────────────────────────────────── */
@@ -277,7 +576,6 @@ function _doExport(dashId, format) {
         window.print();
         return;
     }
-    // Excel or HTML — server-side generation
     const url = `/api/dashboards/${dashId}/export/${format}`;
     const a = document.createElement("a");
     a.href = url;
@@ -328,4 +626,14 @@ function formatDate(dateStr) {
     if (!dateStr) return "";
     const d = new Date(dateStr);
     return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+function formatNum(val) {
+    if (val === undefined || val === null) return "—";
+    if (typeof val === "number") return val.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    return String(val);
+}
+
+function capitalise(str) {
+    return str.charAt(0).toUpperCase() + str.slice(1);
 }

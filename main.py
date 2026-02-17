@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse
 import pandas as pd
 
 import database as db
-from csv_analyzer import analyze_csv
+from csv_analyzer import analyze_csv, build_custom_chart, compute_summary_stats, classify_columns
 
 BASE_DIR = Path(__file__).parent
 UPLOADS_DIR = BASE_DIR / "uploads"
@@ -92,6 +92,8 @@ async def upload_csv(
             "rows": result["row_count"],
             "cols": result["col_count"],
             "preview": result["preview"],
+            "columns_meta": result["columns_meta"],
+            "summary_stats": result["summary_stats"],
         })
         all_charts.extend(result["charts"])
 
@@ -132,6 +134,65 @@ async def delete_dashboard(dashboard_id: str, request: Request, response: Respon
     if not db.delete_dashboard(dashboard_id, sid):
         raise HTTPException(404, "Dashboard not found")
     return {"ok": True}
+
+
+# ── API: Add custom chart to dashboard ───────────────────────────
+@app.post("/api/dashboards/{dashboard_id}/charts")
+async def add_custom_chart(dashboard_id: str, request: Request, response: Response):
+    sid = _session(request, response)
+    dash = db.get_dashboard(dashboard_id, sid)
+    if not dash:
+        raise HTTPException(404, "Dashboard not found")
+
+    body = await request.json()
+    chart_type = body.get("chart_type", "bar")
+    col_x = body.get("col_x")
+    col_y = body.get("col_y")
+    csv_file_id = body.get("csv_file_id")
+
+    if not col_x:
+        raise HTTPException(400, "col_x is required")
+
+    # Find the CSV file
+    csv_file = None
+    for cf in dash["csv_files"]:
+        if csv_file_id and cf["id"] == csv_file_id:
+            csv_file = cf
+            break
+    if not csv_file:
+        csv_file = dash["csv_files"][0] if dash["csv_files"] else None
+    if not csv_file:
+        raise HTTPException(400, "No CSV file found")
+
+    try:
+        chart = build_custom_chart(csv_file["file_path"], chart_type, col_x, col_y)
+    except Exception as e:
+        raise HTTPException(422, str(e))
+
+    db.save_charts(dashboard_id, csv_file["id"], [chart])
+    return chart
+
+
+# ── API: Get summary stats for a dashboard ───────────────────────
+@app.get("/api/dashboards/{dashboard_id}/summary")
+async def get_summary(dashboard_id: str, request: Request, response: Response):
+    sid = _session(request, response)
+    dash = db.get_dashboard(dashboard_id, sid)
+    if not dash:
+        raise HTTPException(404)
+
+    all_stats = []
+    for cf in dash["csv_files"]:
+        df = pd.read_csv(cf["file_path"], low_memory=False)
+        df.columns = df.columns.str.strip()
+        meta = classify_columns(df)
+        stats = compute_summary_stats(df, meta)
+        all_stats.append({
+            "filename": cf["original_filename"],
+            "csv_file_id": cf["id"],
+            "stats": stats,
+        })
+    return all_stats
 
 
 # ── API: Rename dashboard ───────────────────────────────────────
