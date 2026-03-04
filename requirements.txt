@@ -4,4 +4,4 @@ pandas
 openpyxl
 python-multipart
 numpy
-upload
+gunicorn
