@@ -70,7 +70,94 @@ async def upload_csv(
     files: list[UploadFile] = File(...),
     dashboard_name: str = Form(None),
 ):
-    raise HTTPException(403, "Uploading new files is disabled.")
+    sid = _session(request, response)
+
+    # Validate files
+    if not files:
+        raise HTTPException(400, "No files uploaded")
+
+    for f in files:
+        if not f.filename.lower().endswith((".csv", ".xlsx", ".xls")):
+            raise HTTPException(400, f"Unsupported file type: {f.filename}")
+
+    # Create dashboard
+    name = dashboard_name or files[0].filename.rsplit(".", 1)[0]
+    dashboard_id = db.create_dashboard(sid, name)
+
+    all_charts = []
+    csv_files_info = []
+
+    for f in files:
+        # Read file content
+        content = await f.read()
+
+        # Check file size
+        if len(content) > MAX_FILE_SIZE_MB * 1024 * 1024:
+            raise HTTPException(413, f"File {f.filename} exceeds {MAX_FILE_SIZE_MB}MB limit")
+
+        # Save to disk with UUID filename
+        ext = Path(f.filename).suffix.lower()
+        stored_name = f"{uuid.uuid4().hex}{ext}"
+        file_path = UPLOADS_DIR / stored_name
+
+        with open(file_path, "wb") as out:
+            out.write(content)
+
+        # Convert Excel to CSV if needed
+        if ext in (".xlsx", ".xls"):
+            try:
+                df = pd.read_excel(file_path)
+            except Exception as e:
+                file_path.unlink(missing_ok=True)
+                raise HTTPException(422, f"Cannot read {f.filename}: {e}")
+            csv_stored = f"{uuid.uuid4().hex}.csv"
+            csv_path = UPLOADS_DIR / csv_stored
+            df.to_csv(csv_path, index=False)
+            file_path.unlink(missing_ok=True)
+            file_path = csv_path
+            stored_name = csv_stored
+
+        # Validate CSV and check row count
+        try:
+            df = pd.read_csv(file_path, low_memory=False)
+        except Exception as e:
+            file_path.unlink(missing_ok=True)
+            raise HTTPException(422, f"Cannot parse {f.filename}: {e}")
+
+        if len(df) > MAX_ROW_COUNT:
+            file_path.unlink(missing_ok=True)
+            raise HTTPException(413, f"File {f.filename} has {len(df)} rows (max {MAX_ROW_COUNT})")
+
+        # Classify columns and save metadata
+        col_meta = classify_columns(df)
+        csv_id = db.save_csv_metadata(
+            dashboard_id, f.filename, stored_name,
+            str(file_path), len(df), len(df.columns), col_meta,
+        )
+
+        csv_files_info.append({
+            "id": csv_id,
+            "original_filename": f.filename,
+            "stored_filename": stored_name,
+            "file_path": str(file_path),
+            "row_count": len(df),
+            "col_count": len(df.columns),
+        })
+
+        # Auto-generate charts
+        try:
+            result = analyze_csv(str(file_path), MAX_ROW_COUNT)
+            saved = db.save_charts(dashboard_id, csv_id, result["charts"])
+            all_charts.extend(saved)
+        except Exception:
+            pass
+
+    return {
+        "dashboard_id": dashboard_id,
+        "name": name,
+        "csv_files": csv_files_info,
+        "charts": all_charts,
+    }
 
 
 # ── API: List dashboards ────────────────────────────────────────
